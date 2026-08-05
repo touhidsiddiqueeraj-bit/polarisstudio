@@ -62,6 +62,7 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 ## Known limitations
 
 - **Model downloads from HuggingFace are unreliable** — downloads can stall, fail silently, or never appear in the download list, especially from datacenter IPs (HF throttles/401s them). Retrying, or downloading manually via `curl -L -C -` into a configured model directory, is the workaround.
+- **No cancel button for in-flight downloads** — once a download is queued there is no way to abort it from the UI; it runs to completion (or stalls). Restarting the app is the only out.
 
 ## Resolved
 

@@ -4,12 +4,22 @@
   "description": "LM Studio-style local AI studio for AMD Vulkan (RX 580 Polaris): text, image, video, model library",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "dist": "electron-builder --linux AppImage"
+  },
+  "build": {
+    "appId": "com.touhid.polarisstudio",
+    "productName": "PolarisStudio",
+    "linux": {
+      "target": ["AppImage"],
+      "category": "Utility"
+    }
   },
   "author": "touhid",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^41.7.1"
+    "electron": "^41.7.1",
+    "electron-builder": "^26.15.3"
   },
   "allowScripts": {
     "electron@41.7.1": true

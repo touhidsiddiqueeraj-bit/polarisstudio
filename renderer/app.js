@@ -534,13 +534,18 @@ async function hfSearch() {
 
 async function hfFiles(repoId, row) {
   if (row.dataset.files) return;
-  row.dataset.files = '1';
+  if (row.dataset.loading) return;
+  row.dataset.loading = '1';
+  const prev = row.nextElementSibling;
+  if (prev && prev.classList.contains('lib-list')) prev.remove();
   const filesBox = el('div', 'lib-list', null);
   filesBox.style.maxHeight = '200px';
   row.after(filesBox);
   let list;
   try { list = await api('/api/hf/files?repo=' + encodeURIComponent(repoId)); }
-  catch (e) { filesBox.append(el('div', 'msg error', 'listing failed: ' + e.message)); return; }
+  catch (e) { filesBox.append(el('div', 'msg error', 'listing failed: ' + e.message)); delete row.dataset.loading; return; }
+  delete row.dataset.loading;
+  row.dataset.files = '1';
   const shown = list.files.slice(0, 12);
   if (!shown.length) { filesBox.append(el('div', 'muted', 'no runnable files (.gguf / .safetensors)')); }
   for (const f of shown) {
@@ -559,6 +564,11 @@ async function startDownload(repoId, file, btn) {
   btn.disabled = true;
   btn.textContent = '…';
   const destDir = config.modelDirs[0] || '';
+  if (!destDir) {
+    btn.disabled = false; btn.textContent = '↓';
+    alert('no model directory set — add one in the Library tab');
+    return;
+  }
   let id;
   try { ({ id } = await api('/api/hf/download', { method: 'POST', body: { repo: repoId, file, destDir } })); }
   catch (e) { btn.disabled = false; btn.textContent = '↓'; alert('download failed: ' + e.message); return; }
