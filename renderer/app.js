@@ -540,9 +540,10 @@ async function hfFiles(repoId, row) {
   if (prev && prev.classList.contains('lib-list')) prev.remove();
   const filesBox = el('div', 'lib-list', null);
   filesBox.style.maxHeight = '200px';
+  filesBox.style.flex = '0 0 auto'; // flex parent crushes shrinkable items to 0 height when oversubscribed — box must keep its height and let the parent scroll
   row.after(filesBox);
   let list;
-  try { list = await api('/api/hf/files?repo=' + encodeURIComponent(repoId)); }
+  try { list = await api('/api/hf/files?repo=' + encodeURIComponent(repoId), { signal: AbortSignal.timeout(20000) }); }
   catch (e) { filesBox.append(el('div', 'msg error', 'listing failed: ' + e.message)); delete row.dataset.loading; return; }
   delete row.dataset.loading;
   row.dataset.files = '1';
