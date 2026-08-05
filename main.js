@@ -40,21 +40,33 @@ function transcribe(data) {
     if (!bin || !fs.existsSync(bin)) return reject(new Error(`stt binary missing: ${bin}`));
     const tmp = path.join(os.tmpdir(), `polaris-stt-${Date.now()}`);
     const wav = tmp + '.wav';
-    fs.writeFileSync(wav, Buffer.from(data.audioB64, 'base64'));
-    const args = ['-m', data.model, '-f', wav, '-nt', '-np', '-l', data.language || 'auto', '-otxt', '-of', tmp];
-    const { spawn } = require('child_process');
-    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let err = '';
-    proc.stderr.on('data', (d) => (err += d.toString()));
-    proc.on('error', reject);
-    proc.on('close', (code) => {
-      fs.unlinkSync(wav);
-      if (code !== 0) return reject(new Error(`whisper-cli exited ${code}: ${err.slice(0, 300)}`));
-      let text = '';
-      try { text = fs.readFileSync(tmp + '.txt', 'utf8'); } catch (e) { /* fall through */ }
-      try { fs.unlinkSync(tmp + '.txt'); } catch (e) { /* ignore */ }
-      resolve({ text: text.trim() });
+    const raw = Buffer.from(data.audioB64, 'base64');
+    fs.writeFileSync(wav, raw);
+    const { spawn, execFile } = require('child_process');
+    // whisper-cli only reads WAV; convert webm/mp3/m4a (mic chunks, uploaded files) with ffmpeg
+    const convert = () => new Promise((res, rej) => {
+      execFile('ffmpeg', ['-y', '-loglevel', 'error', '-i', wav, '-ar', '16000', '-ac', '1', tmp + '.c.wav'], (err) => {
+        if (!err) fs.renameSync(tmp + '.c.wav', wav);
+        err ? rej(new Error('ffmpeg: ' + (err.message || err).slice(0, 200))) : res();
+      });
     });
+    const run = () => {
+      const args = ['-m', data.model, '-f', wav, '-nt', '-np', '-l', data.language || 'auto', '-otxt', '-of', tmp];
+      const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let err = '';
+      proc.stderr.on('data', (d) => (err += d.toString()));
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        fs.unlinkSync(wav);
+        if (code !== 0) return reject(new Error(`whisper-cli exited ${code}: ${err.slice(0, 300)}`));
+        let text = '';
+        try { text = fs.readFileSync(tmp + '.txt', 'utf8'); } catch (e) { /* fall through */ }
+        try { fs.unlinkSync(tmp + '.txt'); } catch (e) { /* ignore */ }
+        resolve({ text: text.trim() });
+      });
+    };
+    const isWav = raw.length >= 12 && raw.toString('ascii', 0, 4) === 'RIFF';
+    (isWav ? Promise.resolve() : convert()).then(run).catch(reject);
   });
 }
 
@@ -75,6 +87,8 @@ function createWindow() {
   });
   win.setMenuBarVisibility(false);
   win.loadURL(`http://127.0.0.1:${UI_PORT}`);
+  // live mic transcription needs getUserMedia; the page is our own localhost UI
+  win.webContents.session.setPermissionRequestHandler((wc, permission, callback) => callback(permission === 'media'));
   // renderer crash (GPU/GL issue on old cards) must not take the whole app down
   win.webContents.on('render-process-gone', () => {
     console.log('renderer crashed — recreating window, server stays up');

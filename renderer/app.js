@@ -146,16 +146,17 @@ function bindUI() {
     setPill('st-audio', 'starting…');
     try {
       const status = await api('/api/engine/start', { method: 'POST', body: { type: 'audio' } });
-      setPill('st-audio', status.running ? status.model + ' ✓' : 'idle');
+      setPill('st-audio', status.running ? ttsPillLabel() : 'idle');
     } catch (e) { setPill('st-audio', 'failed'); showErr('audio start: ' + e.message); }
     loadAudioVoices();
   });
   $('#audio-gen').addEventListener('click', generateTTS);
-  $('#tts-model').addEventListener('change', switchAudioBackend);
+  $('#tts-model').addEventListener('change', () => { switchAudioBackend(); setPill('st-audio', ttsPillLabel()); });
   $('#audio-save').addEventListener('click', saveAudio);
   $('#clone-go').addEventListener('click', cloneVoice);
   $('#clone-file').addEventListener('change', () => { $('#clone-status').textContent = $('#clone-file').files[0] ? $('#clone-file').files[0].name + ' (' + fmt($('#clone-file').files[0].size) + ')' : ''; });
   $('#trans-go').addEventListener('click', transcribe);
+  $('#trans-live').addEventListener('click', toggleLive);
   $('#trans-copy').addEventListener('click', () => navigator.clipboard.writeText($('#trans-text').value));
   $('#trans-save').addEventListener('click', () => {
     const a = document.createElement('a');
@@ -398,10 +399,16 @@ function setPill(id, text, running) {
   p.classList.toggle('running', !!running);
 }
 
+function ttsPillLabel() {
+  const sel = $('#tts-model');
+  const q3 = sel && sel.value !== 'kokoro';
+  return (q3 ? (sel.selectedOptions[0] ? sel.selectedOptions[0].text : 'Qwen3-TTS') : 'Kokoro + XTTS-v2') + ' ✓';
+}
+
 async function refreshEngineStatus() {
   const st = await api('/api/engines');
   for (const [type, s] of Object.entries(st)) {
-    setPill('st-' + type, s.running ? (s.model || 'running') + ' ✓' : 'idle', s.running);
+    setPill('st-' + type, s.running ? (type === 'audio' ? ttsPillLabel() : (s.model || 'running') + ' ✓') : 'idle', s.running);
   }
 }
 
@@ -728,6 +735,63 @@ async function transcribe() {
     st.textContent = r.text ? 'done' : 'no speech detected';
     if ($('#trans-autocopy').checked && r.text) navigator.clipboard.writeText(r.text);
   } catch (e) { st.textContent = 'error: ' + e.message; }
+}
+
+// ---------------- live mic ----------------
+let liveRec = null;
+let liveStream = null;
+let liveBusy = false;
+let liveChunks = 0;
+
+async function toggleLive() {
+  const btn = $('#trans-live');
+  const st = $('#trans-live-status');
+  if (liveRec) {
+    liveRec.stop();
+    return;
+  }
+  if (!$('#audio-model').value) { st.textContent = 'pick a whisper model in the Library first'; return; }
+  try {
+    liveStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    st.textContent = 'mic error: ' + e.message;
+    return;
+  }
+  liveChunks = 0;
+  liveBusy = false;
+  const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((m) => MediaRecorder.isTypeSupported(m)) || '';
+  liveRec = new MediaRecorder(liveStream, mime ? { mimeType: mime } : undefined);
+  liveRec.start(3000);
+  liveRec.ondataavailable = async (e) => {
+    if (!e.data.size || liveBusy) return; // whisper still on the last chunk — drop this one
+    liveBusy = true;
+    liveChunks++;
+    try {
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(String(r.result).split(',')[1]);
+        r.onerror = rej;
+        r.readAsDataURL(e.data);
+      });
+      const r = await api('/api/audio/transcribe', { method: 'POST', body: { audioB64: b64, model: $('#audio-model').value, language: $('#trans-lang').value } });
+      const t = (r.text || '').trim();
+      if (t) {
+        $('#trans-text').value += ($('#trans-text').value ? '\n' : '') + t;
+        if ($('#trans-autocopy').checked) navigator.clipboard.writeText(t);
+      }
+      st.textContent = 'listening… (' + liveChunks + ' chunks)';
+    } catch (err) { st.textContent = 'error: ' + err.message; }
+    finally { liveBusy = false; }
+  };
+  liveRec.onstop = () => {
+    if (liveStream) liveStream.getTracks().forEach((t) => t.stop());
+    liveStream = null;
+    liveRec = null;
+    btn.textContent = 'Start live mic';
+    st.textContent = 'stopped (' + liveChunks + ' chunks)';
+  };
+  btn.textContent = 'Stop live mic';
+  st.textContent = 'listening…';
 }
 
 // ---------------- HF ----------------
