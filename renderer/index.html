@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self'; connect-src 'self'">
+<title>PolarisStudio</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">&#9733;</div>
+      <div>
+        <div class="brand-name">PolarisStudio</div>
+        <div class="brand-sub">local AI · Vulkan</div>
+      </div>
+    </div>
+    <button id="conv-new" class="btn new-chat">+ New chat</button>
+    <div id="conv-list" class="conv-list"></div>
+    <div class="sidebar-foot">
+      <div class="pill pill-gpu">RX 580 · Vulkan</div>
+      <div class="pill" id="build-tag">build 3</div>
+      <button id="app-quit" class="btn ghost sm" title="quit the app">Quit</button>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <header class="topbar">
+      <nav class="tabs">
+        <button class="tab active" data-tab="chat">Chat</button>
+        <button class="tab" data-tab="images">Images</button>
+        <button class="tab" data-tab="video">Video</button>
+        <button class="tab" data-tab="library">Library</button>
+      </nav>
+      <div class="statusbar">
+        <span class="pill" id="st-text">text: idle</span>
+        <span class="pill" id="st-image">image: idle</span>
+        <span class="pill" id="st-video">video: idle</span>
+        <button id="log-toggle" class="btn ghost sm" title="toggle engine log">log</button>
+      </div>
+    </header>
+
+    <!-- ============ CHAT ============ -->
+    <section class="panel active" id="tab-chat">
+      <div class="chat-toolbar">
+        <select id="chat-model" class="select"></select>
+        <button id="chat-start-engine" class="btn">Start engine</button>
+        <label class="field-inline">ctx <input id="chat-ctx" type="number" value="8192" min="512" step="512" class="num"></label>
+        <label class="field-inline">temp <input id="chat-temp" type="number" value="0.7" min="0" max="2" step="0.05" class="num"></label>
+        <label class="check" title="model reasoning / chain-of-thought"><input id="chat-thinking" type="checkbox" checked> thinking</label>
+        <button id="chat-clear" class="btn ghost">Clear</button>
+      </div>
+      <div id="chat-messages" class="messages"></div>
+      <div class="serverbar">
+        <label class="check"><input id="srv-enable" type="checkbox"> Expose OpenAI API to other apps/agents on LAN</label>
+        <label class="field-inline">API key (optional) <input id="srv-key" type="password" placeholder="empty = no auth" class="input"></label>
+        <button id="srv-apply" class="btn">Apply</button>
+        <span id="srv-url" class="muted"></span>
+      </div>
+      <div class="chat-inputbar">
+        <textarea id="chat-input" rows="2" placeholder="Message the model… (Enter to send, Shift+Enter for newline)"></textarea>
+        <div class="chat-actions">
+          <button id="chat-send" class="btn primary">Send</button>
+          <button id="chat-stop" class="btn ghost" disabled>Stop</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ IMAGES ============ -->
+    <section class="panel" id="tab-images">
+      <div class="sub-tabs">
+        <button class="sub-tab active" data-sub="txt2img">txt2img</button>
+        <button class="sub-tab" data-sub="img2img">img2img</button>
+      </div>
+      <div class="side-by-side">
+        <div class="controls">
+          <div id="img2-tab" class="img2box" hidden>
+            <img id="img2-src" class="img2src" alt="">
+            <input id="img2-file" type="file" accept="image/*">
+            <label>denoise <input id="img2-denoise" type="number" value="0.6" min="0" max="1" step="0.05" class="num"></label>
+          </div>
+          <select id="img-model" class="select"></select>
+          <button id="img-start-engine" class="btn">Start engine</button>
+
+          <details class="section" open>
+            <summary>Prompt</summary>
+            <label>prompt <textarea id="img-prompt" rows="4" placeholder="A lonely lighthouse on a cliff, dark storm, cinematic"></textarea></label>
+            <label>negative <input id="img-neg" type="text" placeholder="blurry, lowres" class="input"></label>
+          </details>
+
+          <details class="section" open>
+            <summary>Sampling</summary>
+            <div class="grid2">
+              <label>sampler
+                <select id="img-sampler" class="select"></select>
+              </label>
+              <label>scheduler
+                <select id="img-scheduler" class="select"></select>
+              </label>
+            </div>
+            <div class="grid2">
+              <label>steps <input id="img-steps" type="number" value="4" min="1" max="50" class="num"></label>
+              <label>cfg <input id="img-cfg" type="number" value="1.0" min="0.5" max="30" step="0.1" class="num"></label>
+            </div>
+            <div class="grid2">
+              <label>seed <input id="img-seed" type="number" value="-1" class="num"></label>
+              <label>batch <input id="img-batch" type="number" value="1" min="1" max="8" class="num"></label>
+            </div>
+          </details>
+
+          <details class="section">
+            <summary>Resolution</summary>
+            <div class="grid2">
+              <label>width <input id="img-w" type="number" value="512" class="num"></label>
+              <label>height <input id="img-h" type="number" value="512" class="num"></label>
+            </div>
+          </details>
+
+          <details class="section">
+            <summary>Advanced</summary>
+            <label>clip skip <input id="img-clipskip" type="number" value="-1" min="-1" max="12" class="num"></label>
+            <label class="check"><input id="img-upscale" type="checkbox"> 4x upscale (RealESRGAN)</label>
+          </details>
+
+          <button id="img-generate" class="btn primary">Generate</button>
+          <div id="img-status" class="muted"></div>
+        </div>
+        <div class="preview">
+          <div id="img-result" class="canvas"><span class="placeholder-label">no image yet — pick a model and generate</span></div>
+          <div class="preview-actions">
+            <button id="img-save" class="btn ghost" hidden>Save PNG</button>
+            <span id="img-meta" class="muted"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ VIDEO ============ -->
+    <section class="panel" id="tab-video">
+      <div class="side-by-side">
+        <div class="controls">
+          <h2>txt2vid <span class="tag">AnimateDiff</span></h2>
+          <select id="vid-model" class="select"></select>
+          <button id="vid-start-engine" class="btn">Start engine</button>
+          <label>prompt <textarea id="vid-prompt" rows="4" placeholder="A cat walking across a desk, motion blur, 2s clip"></textarea></label>
+          <details class="section" open>
+            <summary>Sampling</summary>
+            <div class="grid2">
+              <label>sampler
+                <select id="vid-sampler" class="select"></select>
+              </label>
+              <label>scheduler
+                <select id="vid-scheduler" class="select"></select>
+              </label>
+            </div>
+            <div class="grid2">
+              <label>steps <input id="vid-steps" type="number" value="4" min="1" max="50" class="num"></label>
+              <label>cfg <input id="vid-cfg" type="number" value="1.0" min="0.5" max="30" step="0.1" class="num"></label>
+            </div>
+            <div class="grid2">
+              <label>seed <input id="vid-seed" type="number" value="-1" class="num"></label>
+              <label>fps <input id="vid-fps" type="number" value="8" class="num"></label>
+            </div>
+          </details>
+          <details class="section" open>
+            <summary>Frames</summary>
+            <div class="grid2">
+              <label>width <input id="vid-w" type="number" value="384" class="num"></label>
+              <label>height <input id="vid-h" type="number" value="384" class="num"></label>
+            </div>
+            <label>frames <input id="vid-frames" type="number" value="8" min="4" max="24" class="num"></label>
+          </details>
+          <button id="vid-generate" class="btn primary">Generate</button>
+          <div id="vid-status" class="muted"></div>
+        </div>
+        <div class="preview">
+          <div id="vid-result" class="canvas"><span class="placeholder-label">generate a clip</span></div>
+          <div class="preview-actions">
+            <button id="vid-save" class="btn ghost" hidden>Save WebM</button>
+            <span id="vid-meta" class="muted"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ LIBRARY ============ -->
+    <section class="panel" id="tab-library">
+      <div class="lib-columns">
+        <div class="lib-local">
+          <h2>Local models</h2>
+          <div class="lib-row">
+            <input id="lib-dirs" type="text" placeholder="model dirs, comma separated" class="input">
+            <button id="lib-dirs-save" class="btn">Save</button>
+          </div>
+          <div id="lib-local" class="lib-list"></div>
+        </div>
+        <div class="lib-hf">
+          <h2>HuggingFace search</h2>
+          <div class="hf-searchbar">
+            <input id="hf-q" type="text" placeholder="e.g. qwen uncensored" class="input">
+            <button id="hf-search" class="btn">Search</button>
+          </div>
+          <div id="hf-results" class="lib-list"></div>
+        </div>
+      </div>
+      <div id="lib-downloads" class="downloads"></div>
+    </section>
+  </main>
+</div>
+
+<footer class="logbar" hidden>
+  <span class="log-title">engine log</span>
+  <pre id="engine-log"></pre>
+</footer>
+
+<script src="vendor/marked.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
