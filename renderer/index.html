@@ -34,12 +34,14 @@
         <button class="tab active" data-tab="chat">Chat</button>
         <button class="tab" data-tab="images">Images</button>
         <button class="tab" data-tab="video">Video</button>
+        <button class="tab" data-tab="audio">Audio</button>
         <button class="tab" data-tab="library">Library</button>
       </nav>
       <div class="statusbar">
         <span class="pill" id="st-text">text: idle</span>
         <span class="pill" id="st-image">image: idle</span>
         <span class="pill" id="st-video">video: idle</span>
+        <span class="pill" id="st-audio">audio: idle</span>
         <button id="log-toggle" class="btn ghost sm" title="toggle engine log">log</button>
       </div>
     </header>
@@ -187,14 +189,96 @@
       </div>
     </section>
 
+    <!-- ============ AUDIO ============ -->
+    <section class="panel" id="tab-audio">
+      <div class="sub-tabs">
+        <button class="sub-tab active" data-sub="tts">TTS</button>
+        <button class="sub-tab" data-sub="clone">Clone</button>
+        <button class="sub-tab" data-sub="transcribe">Transcribe</button>
+      </div>
+      <div id="tts-tab" class="side-by-side">
+        <div class="controls">
+          <h2>text-to-speech <span class="tag">Kokoro-82M</span></h2>
+          <div class="grid2">
+            <label>voice
+              <select id="audio-voice" class="select"></select>
+            </label>
+            <label>speed <input id="audio-speed" type="number" value="1.0" min="0.5" max="2.0" step="0.1" class="num"></label>
+          </div>
+          <label>format
+            <select id="audio-format" class="select">
+              <option value="mp3">mp3</option>
+              <option value="wav">wav</option>
+            </select>
+          </label>
+          <label>output dir <input id="audio-outdir" type="text" class="input"></label>
+          <label>text <textarea id="audio-text" rows="4" placeholder="Type something to speak…"></textarea></label>
+          <button id="audio-start-engine" class="btn">Start engine</button>
+          <button id="audio-gen" class="btn primary">Generate</button>
+          <div id="audio-status" class="muted"></div>
+        </div>
+        <div class="preview">
+          <div id="audio-preview" class="canvas"><span class="placeholder-label">generated audio appears here</span></div>
+          <div class="preview-actions">
+            <button id="audio-save" class="btn ghost" hidden>Save file</button>
+            <span id="audio-meta" class="muted"></span>
+          </div>
+        </div>
+      </div>
+      <div id="clone-tab" class="controls" hidden>
+        <h2>voice clone <span class="tag">XTTS-v2</span></h2>
+        <label>reference clip (10–30s, clean speech)
+          <input id="clone-file" type="file" accept="audio/*">
+        </label>
+        <label>voice name <input id="clone-name" type="text" placeholder="e.g. grandma_mel" class="input"></label>
+        <button id="clone-go" class="btn primary">Clone voice</button>
+        <div id="clone-status" class="muted"></div>
+        <h3>Cloned voices</h3>
+        <div id="clone-list" class="lib-list"></div>
+      </div>
+      <div id="transcribe-tab" class="controls" hidden>
+        <h2>transcribe <span class="tag">whisper.cpp</span></h2>
+        <label>model
+          <select id="audio-model" class="select"></select>
+        </label>
+        <label>audio file
+          <input id="trans-file" type="file" accept="audio/*">
+        </label>
+        <label>language
+          <select id="trans-lang" class="select">
+            <option value="auto">auto</option>
+            <option value="en">en</option>
+            <option value="es">es</option>
+            <option value="fr">fr</option>
+            <option value="de">de</option>
+            <option value="hi">hi</option>
+            <option value="ja">ja</option>
+            <option value="zh">zh</option>
+          </select>
+        </label>
+        <button id="trans-go" class="btn primary">Transcribe</button>
+        <div id="trans-status" class="muted"></div>
+        <textarea id="trans-text" rows="8" placeholder="transcript appears here" class="input"></textarea>
+        <div class="lib-row">
+          <label class="field-inline"><input id="trans-autocopy" type="checkbox"> auto-copy result to clipboard</label>
+          <button id="trans-copy" class="btn ghost">Copy</button>
+          <button id="trans-save" class="btn ghost">Save .txt</button>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ LIBRARY ============ -->
     <section class="panel" id="tab-library">
       <div class="lib-columns">
         <div class="lib-local">
           <h2>Local models</h2>
           <div class="lib-row">
-            <input id="lib-dirs" type="text" placeholder="model dirs, comma separated" class="input">
+            <button id="lib-dirs-browse" class="btn">Browse…</button>
             <button id="lib-dirs-save" class="btn">Save</button>
+          </div>
+          <div id="lib-dirs" class="dir-list"></div>
+          <div class="lib-row">
+            <label class="field-inline">download to <select id="lib-dl-dir" class="select"></select></label>
           </div>
           <div id="lib-local" class="lib-list"></div>
         </div>

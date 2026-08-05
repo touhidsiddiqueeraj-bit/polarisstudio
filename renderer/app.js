@@ -39,6 +39,7 @@ async function api(path, opts = {}) {
 }
 
 let config = null;
+let dirs = [];
 let localModels = [];
 let conversations = [];
 let activeConv = null;
@@ -55,7 +56,13 @@ async function init() {
     $('#srv-enable').checked = !!config.server.enabled;
     if (config.server.apiKey) $('#srv-key').value = config.server.apiKey;
   }
-  $('#lib-dirs').value = (config.modelDirs || []).join(', ');
+  dirs = [...(config.modelDirs || [])];
+  renderDirList();
+  if (config.audio) {
+    $('#audio-outdir').value = config.audio.outputDir || '';
+    $('#trans-autocopy').checked = !!config.audio.copyTranscript;
+  }
+  loadAudioVoices();
   try {
     for (const s of SAMPLERS) $('#img-sampler').append(new Option(s, s));
     for (const s of SCHEDULERS) $('#img-scheduler').append(new Option(s, s));
@@ -122,9 +129,46 @@ function bindUI() {
   $('#hf-search').addEventListener('click', hfSearch);
   $('#hf-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') hfSearch(); });
   $('#lib-dirs-save').addEventListener('click', async () => {
-    const dirs = $('#lib-dirs').value.split(',').map((s) => s.trim()).filter(Boolean);
     config = await api('/api/config/save', { method: 'POST', body: { modelDirs: dirs } });
+    renderDlDirSelect();
     refreshLocal();
+  });
+  $('#lib-dirs-browse').addEventListener('click', async () => {
+    const r = await api('/api/pick-dir', { method: 'POST' });
+    if (!r.dir) return;
+    if (!dirs.includes(r.dir)) dirs.push(r.dir);
+    renderDirList();
+  });
+  $('#lib-dl-dir').addEventListener('change', async (e) => {
+    config = await api('/api/config/save', { method: 'POST', body: { downloadDir: e.target.value } });
+  });
+  $('#audio-start-engine').addEventListener('click', async () => {
+    setPill('st-audio', 'starting…');
+    try {
+      const status = await api('/api/engine/start', { method: 'POST', body: { type: 'audio' } });
+      setPill('st-audio', status.running ? status.model + ' ✓' : 'idle');
+    } catch (e) { setPill('st-audio', 'failed'); showErr('audio start: ' + e.message); }
+    loadAudioVoices();
+  });
+  $('#audio-gen').addEventListener('click', generateTTS);
+  $('#audio-save').addEventListener('click', saveAudio);
+  $('#clone-go').addEventListener('click', cloneVoice);
+  $('#clone-file').addEventListener('change', () => { $('#clone-status').textContent = $('#clone-file').files[0] ? $('#clone-file').files[0].name + ' (' + fmt($('#clone-file').files[0].size) + ')' : ''; });
+  $('#trans-go').addEventListener('click', transcribe);
+  $('#trans-copy').addEventListener('click', () => navigator.clipboard.writeText($('#trans-text').value));
+  $('#trans-save').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent($('#trans-text').value);
+    a.download = 'transcript-' + Date.now() + '.txt';
+    a.click();
+  });
+  $('#trans-autocopy').addEventListener('change', async (e) => {
+    config = await api('/api/config/save', { method: 'POST', body: { audio: { ...(config.audio || {}), copyTranscript: e.target.checked } } });
+  });
+  $('#audio-outdir').addEventListener('change', async (e) => {
+    const v = e.target.value.trim();
+    if (!v) return;
+    config = await api('/api/config/save', { method: 'POST', body: { audio: { ...(config.audio || {}), outputDir: v } } });
   });
 
   $('#srv-apply').addEventListener('click', applyServer);
@@ -166,7 +210,11 @@ function switchTab(name) {
 
 function switchSubTab(name) {
   document.querySelectorAll('.sub-tab').forEach((t) => t.classList.toggle('active', t.dataset.sub === name));
-  $('#img2-tab').hidden = name !== 'img2img';
+  const map = { tts: 'tts-tab', clone: 'clone-tab', transcribe: 'transcribe-tab', img2: 'img2img-tab', img2img: 'img2-tab' };
+  for (const id of Object.values(map)) {
+    const n = $('#' + id);
+    if (n) n.hidden = id !== map[name];
+  }
 }
 
 // ---------------- conversations ----------------
@@ -238,11 +286,12 @@ function modelById(path) { return localModels.find((m) => m.path === path); }
 
 async function refreshLocal() {
   localModels = await api('/api/models');
-  const byType = { text: [], image: [], video: [], aux: [] };
+  const byType = { text: [], image: [], video: [], aux: [], audio: [] };
   for (const m of localModels) byType[m.type].push(m);
   fillSelect('#chat-model', byType.text, 'no text models in library');
   fillSelect('#img-model', byType.image, 'no image models — SD1.5 gguf expected');
   fillSelect('#vid-model', byType.video.length ? byType.video : byType.image, byType.video.length ? '' : 'using image models (AnimateDiff mode)');
+  if ($('#audio-model')) fillSelect('#audio-model', byType.audio, 'no audio models — download a whisper gguf from HF');
   renderLocalList();
 }
 
@@ -256,6 +305,29 @@ function fillSelect(sel, models, placeholder) {
     for (const m of models) s.append(new Option(m.name, m.path));
   }
   if (cur) s.value = cur;
+}
+
+function renderDirList() {
+  const box = $('#lib-dirs');
+  box.innerHTML = '';
+  for (const d of dirs) {
+    const row = el('div', 'dir-row');
+    row.append(el('span', 'dir-path', d));
+    const rm = el('button', 'btn ghost sm', '✕');
+    rm.addEventListener('click', () => { dirs = dirs.filter((x) => x !== d); renderDirList(); });
+    row.append(rm);
+    box.append(row);
+  }
+  renderDlDirSelect();
+}
+
+function renderDlDirSelect() {
+  const s = $('#lib-dl-dir');
+  const cur = config.downloadDir && dirs.includes(config.downloadDir) ? config.downloadDir : (dirs[0] || '');
+  s.innerHTML = '';
+  if (!dirs.length) s.append(new Option('no dirs — add one', ''));
+  for (const d of dirs) s.append(new Option(d, d));
+  s.value = cur;
 }
 
 function renderLocalList() {
@@ -507,6 +579,120 @@ function saveMedia() {
   a.click();
 }
 
+// ---------------- audio ----------------
+let audioVoices = [];
+
+async function loadAudioVoices() {
+  try {
+    const d = await api('/api/audio/voices');
+    audioVoices = d.voices || [];
+    const s = $('#audio-voice');
+    const cur = s.value;
+    s.innerHTML = '';
+    let group = null;
+    for (const v of audioVoices) {
+      if (v.group !== group) {
+        group = v.group;
+        s.append(document.createElement('optgroup'));
+        s.lastChild.label = group;
+      }
+      s.lastChild.append(new Option(v.label + ' — ' + v.id, v.id));
+    }
+    if (cur) s.value = cur;
+    renderCloneList();
+  } catch (e) { /* audio engine not running yet */ }
+}
+
+function renderCloneList() {
+  const box = $('#clone-list');
+  box.innerHTML = '';
+  for (const v of audioVoices.filter((v) => v.group === 'Cloned')) {
+    const row = el('div', 'model-row');
+    row.append(el('span', 'mname', v.label));
+    const del = el('button', 'btn ghost', 'Delete');
+    del.addEventListener('click', async () => {
+      await api('/api/audio/delete-clone', { method: 'POST', body: { name: v.id } });
+      loadAudioVoices();
+    });
+    row.append(del);
+    box.append(row);
+  }
+  if (!box.children.length) box.append(el('div', 'muted', 'no cloned voices yet'));
+}
+
+async function generateTTS() {
+  const text = $('#audio-text').value.trim();
+  if (!text) return;
+  const st = $('#audio-status');
+  st.textContent = 'synthesizing…';
+  try {
+    const r = await api('/api/audio/tts', { method: 'POST', body: { text, voice: $('#audio-voice').value, speed: +$('#audio-speed').value, format: $('#audio-format').value } });
+    if (r.error) throw new Error(r.error);
+    window.__lastAudio = { data: r.audioB64, ext: $('#audio-format').value };
+    const box = $('#audio-preview');
+    box.innerHTML = '';
+    const au = document.createElement('audio');
+    au.controls = true;
+    au.src = 'data:audio/' + $('#audio-format').value + ';base64,' + r.audioB64;
+    box.append(au);
+    $('#audio-meta').textContent = r.file.split('/').pop() + ' · ' + r.duration + 's';
+    $('#audio-save').hidden = false;
+    st.textContent = '';
+  } catch (e) { st.textContent = 'error: ' + e.message; }
+}
+
+function saveAudio() {
+  const m = window.__lastAudio;
+  if (!m) return;
+  const a = document.createElement('a');
+  a.href = 'data:audio/' + m.ext + ';base64,' + m.data;
+  a.download = 'polaris-tts-' + Date.now() + '.' + m.ext;
+  a.click();
+}
+
+async function cloneVoice() {
+  const f = $('#clone-file').files[0];
+  const name = $('#clone-name').value.trim();
+  const st = $('#clone-status');
+  if (!f) { st.textContent = 'pick a reference clip first'; return; }
+  if (!name) { st.textContent = 'give the voice a name'; return; }
+  st.textContent = 'cloning… (first run downloads XTTS-v2, ~2 GB)';
+  try {
+    const b64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1]);
+      r.onerror = reject;
+      r.readAsDataURL(f);
+    });
+    const r = await api('/api/audio/clone', { method: 'POST', body: { audioB64: b64, name } });
+    if (r.error) throw new Error(r.error);
+    st.textContent = 'cloned as "' + r.voice + '"';
+    $('#clone-name').value = '';
+    loadAudioVoices();
+  } catch (e) { st.textContent = 'error: ' + e.message; }
+}
+
+async function transcribe() {
+  const f = $('#trans-file').files[0];
+  const st = $('#trans-status');
+  if (!f) { st.textContent = 'pick an audio file'; return; }
+  if (!$('#audio-model').value) { st.textContent = 'pick a whisper model in the Library first'; return; }
+  st.textContent = 'transcribing…';
+  try {
+    const b64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1]);
+      r.onerror = reject;
+      r.readAsDataURL(f);
+    });
+    const r = await api('/api/audio/transcribe', { method: 'POST', body: { audioB64: b64, model: $('#audio-model').value, language: $('#trans-lang').value } });
+    if (r.error) throw new Error(r.error);
+    $('#trans-text').value = r.text;
+    st.textContent = r.text ? 'done' : 'no speech detected';
+    if ($('#trans-autocopy').checked && r.text) navigator.clipboard.writeText(r.text);
+  } catch (e) { st.textContent = 'error: ' + e.message; }
+}
+
 // ---------------- HF ----------------
 async function hfSearch() {
   const q = $('#hf-q').value.trim();
@@ -591,7 +777,7 @@ function fileInfo(f, btn) {
 async function startDownload(repoId, file, btn) {
   btn.disabled = true;
   btn.textContent = '…';
-  const destDir = config.modelDirs[0] || '';
+  const destDir = config.downloadDir || config.modelDirs[0] || '';
   if (!destDir) {
     btn.disabled = false; btn.textContent = '↓';
     alert('no model directory set — add one in the Library tab');

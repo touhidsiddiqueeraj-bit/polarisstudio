@@ -10,6 +10,7 @@
   "build": {
     "appId": "com.touhid.polarisstudio",
     "productName": "PolarisStudio",
+    "asarUnpack": ["audio_server.py"],
     "linux": {
       "target": ["AppImage"],
       "category": "Utility"

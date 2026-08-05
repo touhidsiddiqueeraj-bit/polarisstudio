@@ -4,6 +4,17 @@ A local AI studio in the spirit of LM Studio, built on Electron + plain Node.js,
 
 No Python, no CUDA, no cloud. The app is a thin orchestration layer: it spawns engine binaries, proxies their HTTP APIs, and gives you a clean UI for chat, image, video, model library, and HuggingFace downloads.
 
+## Where this fits
+
+The "everything local in one app" space is crowded (LM Studio, Locally Uncensored, LocalGPT, OneAI, LocalAI). PolarisStudio's slot is narrower: **low-VRAM AMD Vulkan, one AppImage, no substrate.**
+
+- **Runs on GPUs everyone else refuses** — the stack (llama.cpp + stable-diffusion.cpp on Vulkan, LCM 4-step, ESRGAN, AnimateDiff) is tuned around an RX 580 / 8 GB-class Polaris GPU. Competitors list NVIDIA 8–12 GB as their floor; this app treats 8 GB Vulkan as home.
+- **Genuinely small** — a ~110 MB AppImage with zero Python, zero Docker, zero ComfyUI graph editor as a hidden dependency. Everything else in this niche ships a multi-hundred-MB-to-GB runtime.
+- **Model procurement is first-class** — in-app HuggingFace search, per-file exact size + quant level + a "fits / too big for 8 GB" VRAM verdict before you download, then a resumable `.part` download straight into your library.
+- **Engine cockpit, one window** — per-modality (text/image/video) engine status, spawn/kill, and a shared log without leaving the UI.
+
+Expect parity on the common stuff: OpenAI-compatible LAN API, uncensored-model search, chat/images/video generation. The reason to pick PolarisStudio is the hardware it runs on and how little you have to install to get there.
+
 ## Features
 
 - **Chat** — OpenAI-compatible streaming (SSE), markdown rendering, chain-of-thought ("thinking") toggle, ctx/temperature controls, `repeat_penalty` to tame repetitive models, persistent conversation history with rename/delete.

@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, dialog } = require('electron');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
@@ -7,21 +7,53 @@ const os = require('os');
 const config = require('./lib/config');
 const models = require('./lib/models');
 const hf = require('./lib/hf');
-const { Engine } = require('./lib/engines');
+const { Engine, getJson, postJson } = require('./lib/engines');
 
 const UI_PORT = 9090;
-const CONVERSATIONS_PATH = path.join(__dirname, 'conversations.json');
+const CONVERSATIONS_PATH = path.join(config.DATA_DIR, 'conversations.json');
 
 let win = null;
 const sseClients = new Set();
 
-// engine instances: text / image / video
+// engine instances: text / image / video / audio (companion python server)
 const engines = {};
-for (const type of ['text', 'image', 'video']) {
-  engines[type] = new Engine(type, config.get().engines[type], (t, line) => broadcast({ type: 'engine:log', typeName: t, line }));
+for (const type of ['text', 'image', 'video', 'audio']) {
+  const cfg = { ...config.get().engines[type] };
+  if (type === 'audio') {
+    cfg.script = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', 'audio_server.py') : path.join(__dirname, 'audio_server.py');
+    cfg.spawnEnv = {
+      AUDIO_OUT_DIR: config.get().audio.outputDir || path.join(os.homedir(), 'PolarisAudio'),
+      AUDIO_VOICES_DIR: path.join(config.DATA_DIR, 'voices')
+    };
+  }
+  engines[type] = new Engine(type, cfg, (t, line) => broadcast({ type: 'engine:log', typeName: t, line }));
 }
 
 const downloads = new Map(); // id -> Download
+
+function transcribe(data) {
+  return new Promise((resolve, reject) => {
+    const bin = config.get().engines.stt.binary;
+    if (!bin || !fs.existsSync(bin)) return reject(new Error(`stt binary missing: ${bin}`));
+    const tmp = path.join(os.tmpdir(), `polaris-stt-${Date.now()}`);
+    const wav = tmp + '.wav';
+    fs.writeFileSync(wav, Buffer.from(data.audioB64, 'base64'));
+    const args = ['-m', data.model, '-f', wav, '-nt', '-np', '-l', data.language || 'auto', '-otxt', '-of', tmp];
+    const { spawn } = require('child_process');
+    const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let err = '';
+    proc.stderr.on('data', (d) => (err += d.toString()));
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      fs.unlinkSync(wav);
+      if (code !== 0) return reject(new Error(`whisper-cli exited ${code}: ${err.slice(0, 300)}`));
+      let text = '';
+      try { text = fs.readFileSync(tmp + '.txt', 'utf8'); } catch (e) { /* fall through */ }
+      try { fs.unlinkSync(tmp + '.txt'); } catch (e) { /* ignore */ }
+      resolve({ text: text.trim() });
+    });
+  });
+}
 
 function broadcast(obj) {
   const data = 'data: ' + JSON.stringify(obj) + '\n\n';
@@ -190,6 +222,12 @@ const server = http.createServer(async (req, res) => {
 async function api(p, data, url) {
   switch (p) {
     case '/api/config': return { body: config.get() };
+    case '/api/pick-dir': {
+      const opt = { title: 'Select model directory', properties: ['openDirectory', 'createDirectory'] };
+      const win0 = BrowserWindow.getAllWindows()[0];
+      const r = win0 ? await dialog.showOpenDialog(win0, opt) : await dialog.showOpenDialog(opt);
+      return { body: r.canceled || !r.filePaths.length ? { dir: null } : { dir: r.filePaths[0] } };
+    }
     case '/api/config/save': {
       Object.assign(config.get(), data);
       config.save();
@@ -238,6 +276,11 @@ async function api(p, data, url) {
     case '/api/images/generate': return { body: await engines.image.generate(data.prompt, data.opts || {}) };
     case '/api/images/img2img': return { body: await engines.image.generateImg2Img(data.prompt, data.opts || {}) };
     case '/api/video/generate': return { body: await engines.video.generateVideo(data.prompt, data.opts || {}) };
+    case '/api/audio/voices': return { body: await getJson(engines.audio.baseUrl + '/audio/voices') };
+    case '/api/audio/tts': return { body: await postJson(engines.audio.baseUrl + '/audio/tts', { text: data.text, voice: data.voice, speed: data.speed, format: data.format }) };
+    case '/api/audio/clone': return { body: await postJson(engines.audio.baseUrl + '/audio/clone', { audioB64: data.audioB64, name: data.name }) };
+    case '/api/audio/delete-clone': return { body: await postJson(engines.audio.baseUrl + '/audio/delete-clone', { name: data.name }) };
+    case '/api/audio/transcribe': return { body: await transcribe(data) };
     case '/api/conversations': return { body: loadConversations() };
     case '/api/conversations/save': {
       const list = loadConversations();

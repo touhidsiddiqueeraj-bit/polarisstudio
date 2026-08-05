@@ -242,12 +242,16 @@ textarea { resize: vertical; font-family: inherit; }
   border: 1px solid var(--line); border-radius: 8px; background: var(--bg2);
 }
 .model-row .btn { padding: 4px 10px; font-size: 12px; }
+.dir-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0; }
+.dir-row { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg2); font-size: 12px; }
+.dir-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mtype {
   font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
   padding: 2px 8px; border-radius: 10px; flex-shrink: 0;
   background: var(--bg3); color: var(--muted);
 }
 .mtype.t-text { color: var(--accent); }
+.mtype.t-audio { color: #6ee7a0; }
 .mtype.t-image, .mtype.t-video { color: var(--accent2); }
 .mname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msize { color: var(--muted); font-size: 12px; flex-shrink: 0; }

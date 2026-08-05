@@ -3,3 +3,7 @@ dist/
 config.json
 conversations.json
 *.log
+
+# dev data
+__pycache__/
+voices/
