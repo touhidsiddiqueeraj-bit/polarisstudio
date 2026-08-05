@@ -742,32 +742,11 @@ let liveCtx = null;
 let liveSrc = null;
 let liveWorklet = null;
 let liveStream = null;
-let liveUrl = null;
 let liveBusy = false;
 let liveChunks = 0;
 
 // capture mic as raw PCM in an AudioWorklet, hand whisper a real WAV every 3s —
 // MediaRecorder webm chunks were not reliably standalone-parseable (ponytail: no ffmpeg in this path at all)
-const MIC_WORKLET = `
-class PolarMic extends AudioWorkletProcessor {
-  constructor() { super(); this.buf = []; this.bytes = 0; }
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (ch) { this.buf.push(new Float32Array(ch)); this.bytes += ch.length * 4; }
-    if (this.bytes >= sampleRate * 3 * 4) this.emit();
-    return true;
-  }
-  emit() {
-    const len = this.buf.reduce((n, b) => n + b.length, 0);
-    const all = new Float32Array(len);
-    let o = 0;
-    for (const b of this.buf) { all.set(b, o); o += b.length; }
-    this.buf = []; this.bytes = 0;
-    this.port.postMessage(all.buffer, [all.buffer]);
-  }
-}
-registerProcessor('polaris-mic', PolarMic);
-`;
 
 function pcmToWav(f32, rate) {
   const n = f32.length;
@@ -794,8 +773,7 @@ async function toggleLive() {
     liveSrc.disconnect();
     await liveCtx.close();
     liveStream.getTracks().forEach((t) => t.stop());
-    if (liveUrl) URL.revokeObjectURL(liveUrl);
-    liveCtx = liveSrc = liveWorklet = liveStream = liveUrl = null;
+    liveCtx = liveSrc = liveWorklet = liveStream = null;
     btn.textContent = 'Start live mic';
     st.textContent = 'stopped (' + liveChunks + ' chunks)';
     return;
@@ -811,8 +789,7 @@ async function toggleLive() {
   liveBusy = false;
   try {
     liveCtx = new AudioContext();
-    liveUrl = URL.createObjectURL(new Blob([MIC_WORKLET], { type: 'application/javascript' }));
-    await liveCtx.audioWorklet.addModule(liveUrl);
+    await liveCtx.audioWorklet.addModule('mic-worklet.js');
     liveSrc = liveCtx.createMediaStreamSource(liveStream);
     liveWorklet = new AudioWorkletNode(liveCtx, 'polaris-mic');
     liveSrc.connect(liveWorklet);

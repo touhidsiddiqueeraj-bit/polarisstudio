@@ -214,16 +214,28 @@ class H(BaseHTTPRequestHandler):
             name = slug(body.get("name", "voice"))
             raw = body.get("audioB64", "")
             transcript = str(body.get("transcript", "")).strip()
+            tmp = VOICES_DIR / f".{name}.tmp.wav"
             try:
                 data = base64.b64decode(raw)
-                out = VOICES_DIR / f"{name}.wav"
-                out.write_bytes(data)
-                if wav_duration(out) < 1.0:
-                    out.unlink(missing_ok=True)
+                if data[:4] == b"RIFF":
+                    tmp.write_bytes(data)
+                else:
+                    # ref clips are often mp3/webm/m4a — normalize to a real WAV first
+                    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", "-",
+                                    "-ar", "16000", "-ac", "1", str(tmp)],
+                                   input=data, capture_output=True, check=True)
+                if wav_duration(tmp) < 1.0:
+                    tmp.unlink(missing_ok=True)
                     return self._json({"error": "clip too short (<1s)"}, 400)
+                tmp.rename(VOICES_DIR / f"{name}.wav")
                 if transcript:
                     (VOICES_DIR / f"{name}.txt").write_text(transcript)
+            except subprocess.CalledProcessError as e:
+                tmp.unlink(missing_ok=True)
+                detail = (e.stderr or b"").decode(errors="replace")[:160]
+                return self._json({"error": "reference audio could not be decoded: " + detail}, 400)
             except Exception as e:
+                tmp.unlink(missing_ok=True)
                 return self._json({"error": str(e)}, 400)
             return self._json({"ok": True, "voice": name})
         if self.path == "/audio/delete-clone":

@@ -168,6 +168,7 @@ const STATIC = {
   '/': ['renderer/index.html', 'text/html'],
   '/style.css': ['renderer/style.css', 'text/css'],
   '/app.js': ['renderer/app.js', 'application/javascript'],
+  '/mic-worklet.js': ['renderer/mic-worklet.js', 'application/javascript'],
   '/vendor/marked.min.js': ['renderer/vendor/marked.min.js', 'application/javascript']
 };
 
