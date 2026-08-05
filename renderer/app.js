@@ -553,12 +553,39 @@ async function hfFiles(repoId, row) {
     const fr = el('div', 'model-row');
     fr.append(el('span', 'mname', f.file));
     fr.append(el('span', 'msize', f.size ? fmt(f.size) : '?'));
+    const infoBtn = el('button', 'btn ghost', '?');
+    infoBtn.addEventListener('click', () => fileInfo(f, infoBtn));
+    fr.append(infoBtn);
     const dl = el('button', 'btn', '↓');
     dl.addEventListener('click', () => startDownload(repoId, f.file, dl));
     fr.append(dl);
     filesBox.append(fr);
   }
   if (list.files.length > shown.length) filesBox.append(el('div', 'muted', '+' + (list.files.length - shown.length) + ' more files'));
+}
+
+function fileInfo(f, btn) {
+  const row = btn.parentElement;
+  const box = row.parentElement;
+  const cur = box.querySelector('.file-info');
+  if (cur) {
+    const same = cur._row === row;
+    cur.remove();
+    if (same) return;
+  }
+  const quant = (f.file.match(/(IQ\d[\w_]+|Q\d{1,2}_[\w]+|BF16|FP16|F16|F32)/i) || [])[1] || 'n/a';
+  const info = el('div', 'file-info');
+  info._row = row;
+  info.append(el('div', 'file-info-title', f.file));
+  info.append(el('div', 'file-info-line', 'quant · ' + quant));
+  if (f.size) {
+    const need = (f.size / 1e9) * 1.05 + 1.5;
+    info.append(el('div', 'file-info-line', 'size · ' + fmt(f.size)));
+    info.append(el('div', 'file-info-line', 'VRAM · needs ~' + need.toFixed(1) + ' GB → ' + (need < 7.5 ? 'fits RX 580 8 GB' : 'too big for 8 GB')));
+  } else {
+    info.append(el('div', 'file-info-line', 'size · unknown'));
+  }
+  row.after(info);
 }
 
 async function startDownload(repoId, file, btn) {
