@@ -151,6 +151,7 @@ function bindUI() {
     loadAudioVoices();
   });
   $('#audio-gen').addEventListener('click', generateTTS);
+  $('#tts-model').addEventListener('change', switchAudioBackend);
   $('#audio-save').addEventListener('click', saveAudio);
   $('#clone-go').addEventListener('click', cloneVoice);
   $('#clone-file').addEventListener('change', () => { $('#clone-status').textContent = $('#clone-file').files[0] ? $('#clone-file').files[0].name + ' (' + fmt($('#clone-file').files[0].size) + ')' : ''; });
@@ -291,8 +292,35 @@ async function refreshLocal() {
   fillSelect('#chat-model', byType.text, 'no text models in library');
   fillSelect('#img-model', byType.image, 'no image models — SD1.5 gguf expected');
   fillSelect('#vid-model', byType.video.length ? byType.video : byType.image, byType.video.length ? '' : 'using image models (AnimateDiff mode)');
-  if ($('#audio-model')) fillSelect('#audio-model', byType.audio, 'no audio models — download a whisper gguf from HF');
+  if ($('#audio-model')) fillSelect('#audio-model', byType.audio.filter((m) => /whisper|ggml-/.test(m.name)), 'no audio models — download a whisper gguf from HF');
+  if ($('#tts-model')) fillTTSModels(byType.audio);
   renderLocalList();
+}
+
+const Q3_LANGS = ['English', 'Mandarin Chinese', 'Japanese', 'Korean', 'German', 'French', 'Russian', 'Portuguese', 'Spanish', 'Italian'];
+
+function fillTTSModels(audioModels) {
+  const s = $('#tts-model');
+  const cur = s.value;
+  s.innerHTML = '';
+  s.append(new Option('Kokoro-82M (built-in)', 'kokoro'));
+  for (const m of audioModels) {
+    if (!/qwen-talker/.test(m.name)) continue;
+    const label = 'Qwen3-TTS ' + m.name.replace('qwen-talker-', '').replace(/\.gguf$/, '').replace(/-/g, ' ');
+    s.append(new Option(label, m.path));
+  }
+  if (cur) s.value = cur;
+  switchAudioBackend();
+}
+
+function switchAudioBackend() {
+  const q3 = $('#tts-model').value !== 'kokoro';
+  $('#tts-lang-row').hidden = !q3;
+  $('#clone-text-row').hidden = !q3;
+  if (q3 && !$('#tts-lang').options.length) {
+    for (const l of Q3_LANGS) $('#tts-lang').append(new Option(l, l));
+  }
+  loadAudioVoices();
 }
 
 function fillSelect(sel, models, placeholder) {
@@ -588,15 +616,21 @@ async function loadAudioVoices() {
     audioVoices = d.voices || [];
     const s = $('#audio-voice');
     const cur = s.value;
+    const q3 = $('#tts-model') && $('#tts-model').value !== 'kokoro';
     s.innerHTML = '';
-    let group = null;
-    for (const v of audioVoices) {
-      if (v.group !== group) {
-        group = v.group;
-        s.append(document.createElement('optgroup'));
-        s.lastChild.label = group;
+    if (q3) {
+      s.append(new Option('default voice', 'default'));
+      for (const v of audioVoices.filter((v) => v.group === 'Cloned')) s.append(new Option(v.label, v.id));
+    } else {
+      let group = null;
+      for (const v of audioVoices) {
+        if (v.group !== group) {
+          group = v.group;
+          s.append(document.createElement('optgroup'));
+          s.lastChild.label = group;
+        }
+        s.lastChild.append(new Option(v.label + ' — ' + v.id, v.id));
       }
-      s.lastChild.append(new Option(v.label + ' — ' + v.id, v.id));
     }
     if (cur) s.value = cur;
     renderCloneList();
@@ -626,7 +660,7 @@ async function generateTTS() {
   const st = $('#audio-status');
   st.textContent = 'synthesizing…';
   try {
-    const r = await api('/api/audio/tts', { method: 'POST', body: { text, voice: $('#audio-voice').value, speed: +$('#audio-speed').value, format: $('#audio-format').value } });
+    const r = await api('/api/audio/tts', { method: 'POST', body: { text, voice: $('#audio-voice').value, speed: +$('#audio-speed').value, format: $('#audio-format').value, model: $('#tts-model').value, lang: $('#tts-lang').value || 'English' } });
     if (r.error) throw new Error(r.error);
     window.__lastAudio = { data: r.audioB64, ext: $('#audio-format').value };
     const box = $('#audio-preview');
@@ -654,9 +688,12 @@ async function cloneVoice() {
   const f = $('#clone-file').files[0];
   const name = $('#clone-name').value.trim();
   const st = $('#clone-status');
+  const q3 = $('#tts-model').value !== 'kokoro';
   if (!f) { st.textContent = 'pick a reference clip first'; return; }
   if (!name) { st.textContent = 'give the voice a name'; return; }
-  st.textContent = 'cloning… (first run downloads XTTS-v2, ~2 GB)';
+  const transcript = $('#clone-text').value.trim();
+  if (q3 && !transcript) { st.textContent = 'Qwen3 clone needs the transcript of the clip'; return; }
+  st.textContent = q3 ? 'cloning… (local, ~3s clip is enough)' : 'cloning… (first run downloads XTTS-v2, ~2 GB)';
   try {
     const b64 = await new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -664,7 +701,7 @@ async function cloneVoice() {
       r.onerror = reject;
       r.readAsDataURL(f);
     });
-    const r = await api('/api/audio/clone', { method: 'POST', body: { audioB64: b64, name } });
+    const r = await api('/api/audio/clone', { method: 'POST', body: { audioB64: b64, name, transcript } });
     if (r.error) throw new Error(r.error);
     st.textContent = 'cloned as "' + r.voice + '"';
     $('#clone-name').value = '';

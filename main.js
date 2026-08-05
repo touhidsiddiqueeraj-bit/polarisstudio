@@ -23,7 +23,10 @@ for (const type of ['text', 'image', 'video', 'audio']) {
     cfg.script = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', 'audio_server.py') : path.join(__dirname, 'audio_server.py');
     cfg.spawnEnv = {
       AUDIO_OUT_DIR: config.get().audio.outputDir || path.join(os.homedir(), 'PolarisAudio'),
-      AUDIO_VOICES_DIR: path.join(config.DATA_DIR, 'voices')
+      AUDIO_VOICES_DIR: path.join(config.DATA_DIR, 'voices'),
+      Q3TTS_BIN: config.get().engines.audio.qwen3Binary || '',
+      Q3_CODEC: config.get().engines.audio.q3Codec || '',
+      GGML_BACKEND: config.get().engines.audio.ggmlBackend || 'Vulkan0'
     };
   }
   engines[type] = new Engine(type, cfg, (t, line) => broadcast({ type: 'engine:log', typeName: t, line }));
@@ -277,8 +280,8 @@ async function api(p, data, url) {
     case '/api/images/img2img': return { body: await engines.image.generateImg2Img(data.prompt, data.opts || {}) };
     case '/api/video/generate': return { body: await engines.video.generateVideo(data.prompt, data.opts || {}) };
     case '/api/audio/voices': return { body: await getJson(engines.audio.baseUrl + '/audio/voices') };
-    case '/api/audio/tts': return { body: await postJson(engines.audio.baseUrl + '/audio/tts', { text: data.text, voice: data.voice, speed: data.speed, format: data.format }) };
-    case '/api/audio/clone': return { body: await postJson(engines.audio.baseUrl + '/audio/clone', { audioB64: data.audioB64, name: data.name }) };
+    case '/api/audio/tts': return { body: await postJson(engines.audio.baseUrl + '/audio/tts', { text: data.text, voice: data.voice, speed: data.speed, format: data.format, model: data.model, lang: data.lang }) };
+    case '/api/audio/clone': return { body: await postJson(engines.audio.baseUrl + '/audio/clone', { audioB64: data.audioB64, name: data.name, transcript: data.transcript }) };
     case '/api/audio/delete-clone': return { body: await postJson(engines.audio.baseUrl + '/audio/delete-clone', { name: data.name }) };
     case '/api/audio/transcribe': return { body: await transcribe(data) };
     case '/api/conversations': return { body: loadConversations() };

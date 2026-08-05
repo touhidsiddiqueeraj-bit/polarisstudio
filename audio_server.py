@@ -14,9 +14,14 @@ from pathlib import Path
 
 OUT_DIR = Path(os.environ.get("AUDIO_OUT_DIR", str(Path.home() / "PolarisAudio")))
 VOICES_DIR = Path(os.environ.get("AUDIO_VOICES_DIR", str(OUT_DIR / "voices")))
+Q3TTS_BIN = os.environ.get("Q3TTS_BIN", "")
+Q3_CODEC = os.environ.get("Q3_CODEC", "")
+GGML_BACKEND = os.environ.get("GGML_BACKEND", "Vulkan0")
 os.environ.setdefault("COQUI_TOS_AGREED", "1")  # XTTS-v2 license prompt is interactive; auto-accept for server use
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 VOICES_DIR.mkdir(parents=True, exist_ok=True)
+
+Q3_LANGS = ["English", "Mandarin Chinese", "Japanese", "Korean", "German", "French", "Russian", "Portuguese", "Spanish", "Italian"]
 
 LANGS = {
     "a": "English (US)", "b": "English (UK)", "j": "Japanese", "z": "Chinese",
@@ -115,6 +120,34 @@ def wav_duration(path, sr=None):
         return 0.0
 
 
+def find_codec(talker):
+    """Qwen3-TTS needs the shared 12Hz tokenizer GGUF; env path first, then beside the talker."""
+    if Q3_CODEC and Path(Q3_CODEC).exists():
+        return Q3_CODEC
+    for f in sorted(Path(talker).parent.glob("qwen-tokenizer-12hz*.gguf")):
+        return str(f)
+    raise RuntimeError("qwen-tokenizer-12hz GGUF not found next to the talker (or set engines.audio.q3Codec)")
+
+
+def synth_qwen3(text, talker, lang, voice, out_wav):
+    if not Q3TTS_BIN or not Path(Q3TTS_BIN).exists():
+        raise RuntimeError(f"qwen3 binary missing: {Q3TTS_BIN} (set engines.audio.qwen3Binary)")
+    cmd = [Q3TTS_BIN, "--model", talker, "--codec", find_codec(talker), "--lang", lang, "-o", str(out_wav)]
+    if voice and voice != "default":
+        ref = VOICES_DIR / f"{voice}.wav"
+        if not ref.exists():
+            raise ValueError(f"unknown voice: {voice}")
+        cmd += ["--ref-wav", str(ref), "--ref-text", str(VOICES_DIR / f"{voice}.txt")]
+    env = {**os.environ, "GGML_BACKEND": GGML_BACKEND}
+    try:
+        proc = subprocess.run(cmd, input=text, text=True, capture_output=True, timeout=600, env=env)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("qwen3 synthesis timed out (600s)")
+    if proc.returncode != 0:
+        raise RuntimeError(f"qwen-tts failed: {(proc.stderr or proc.stdout)[-800:]}")
+    return wav_duration(out_wav)
+
+
 def to_mp3(wav, mp3):
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-codec:a", "libmp3lame", "-q:a", "2", str(mp3)], check=True)
     return mp3
@@ -157,16 +190,21 @@ class H(BaseHTTPRequestHandler):
             voice = str(body.get("voice", "am_liam"))
             speed = float(body.get("speed", 1.0))
             fmt = str(body.get("format", "wav"))
+            model = str(body.get("model", "kokoro"))
+            lang = str(body.get("lang", "English"))
             if not text:
                 return self._json({"error": "empty text"}, 400)
             ts = str(int(time.time() * 1000))
             wav = OUT_DIR / f"tts_{ts}.wav"
             try:
                 with _lock:
-                    if voice in KOKORO:
-                        sr = synth_kokoro(text, voice, speed, wav)
+                    if model in ("", "kokoro"):
+                        if voice in KOKORO:
+                            sr = synth_kokoro(text, voice, speed, wav)
+                        else:
+                            sr = synth_xtts(text, voice, speed, wav)
                     else:
-                        sr = synth_xtts(text, voice, speed, wav)
+                        sr = synth_qwen3(text, model, lang, voice, wav)
             except Exception as e:
                 return self._json({"error": str(e)}, 500)
             final = to_mp3(wav, OUT_DIR / f"tts_{ts}.mp3") if fmt == "mp3" else wav
@@ -175,6 +213,7 @@ class H(BaseHTTPRequestHandler):
         if self.path == "/audio/clone":
             name = slug(body.get("name", "voice"))
             raw = body.get("audioB64", "")
+            transcript = str(body.get("transcript", "")).strip()
             try:
                 data = base64.b64decode(raw)
                 out = VOICES_DIR / f"{name}.wav"
@@ -182,6 +221,8 @@ class H(BaseHTTPRequestHandler):
                 if wav_duration(out) < 1.0:
                     out.unlink(missing_ok=True)
                     return self._json({"error": "clip too short (<1s)"}, 400)
+                if transcript:
+                    (VOICES_DIR / f"{name}.txt").write_text(transcript)
             except Exception as e:
                 return self._json({"error": str(e)}, 400)
             return self._json({"ok": True, "voice": name})

@@ -198,7 +198,13 @@
       </div>
       <div id="tts-tab" class="side-by-side">
         <div class="controls">
-          <h2>text-to-speech <span class="tag">Kokoro-82M</span></h2>
+          <h2>text-to-speech <span class="tag">Kokoro-82M / Qwen3-TTS</span></h2>
+          <label>model
+            <select id="tts-model" class="select"></select>
+          </label>
+          <label id="tts-lang-row" hidden>language
+            <select id="tts-lang" class="select"></select>
+          </label>
           <div class="grid2">
             <label>voice
               <select id="audio-voice" class="select"></select>
@@ -231,6 +237,7 @@
           <input id="clone-file" type="file" accept="audio/*">
         </label>
         <label>voice name <input id="clone-name" type="text" placeholder="e.g. grandma_mel" class="input"></label>
+        <label id="clone-text-row" hidden>ref transcript (Qwen3 clone) <textarea id="clone-text" rows="2" placeholder="exact words spoken in the reference clip"></textarea></label>
         <button id="clone-go" class="btn primary">Clone voice</button>
         <div id="clone-status" class="muted"></div>
         <h3>Cloned voices</h3>
