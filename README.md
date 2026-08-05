@@ -61,8 +61,11 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 
 ## Known limitations
 
-- **Log button can be unresponsive** — the engine-log panel sometimes fails to toggle/update; a window reload usually restores it.
 - **Model downloads from HuggingFace are unreliable** — downloads can stall, fail silently, or never appear in the download list, especially from datacenter IPs (HF throttles/401s them). Retrying, or downloading manually via `curl -L -C -` into a configured model directory, is the workaround.
+
+## Resolved
+
+- **Log button unresponsive** — the engine-log panel appeared dead because the `footer.logbar` sat below the viewport: `.app` was fixed at `100vh` and `body { overflow: hidden }` clipped it. The app body is now a flex column and the panel slides into view on toggle (build 4+).
 
 ## Troubleshooting
 
