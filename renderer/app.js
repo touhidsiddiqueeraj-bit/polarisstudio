@@ -738,16 +738,66 @@ async function transcribe() {
 }
 
 // ---------------- live mic ----------------
-let liveRec = null;
+let liveCtx = null;
+let liveSrc = null;
+let liveWorklet = null;
 let liveStream = null;
+let liveUrl = null;
 let liveBusy = false;
 let liveChunks = 0;
+
+// capture mic as raw PCM in an AudioWorklet, hand whisper a real WAV every 3s —
+// MediaRecorder webm chunks were not reliably standalone-parseable (ponytail: no ffmpeg in this path at all)
+const MIC_WORKLET = `
+class PolarMic extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = []; this.bytes = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) { this.buf.push(new Float32Array(ch)); this.bytes += ch.length * 4; }
+    if (this.bytes >= sampleRate * 3 * 4) this.emit();
+    return true;
+  }
+  emit() {
+    const len = this.buf.reduce((n, b) => n + b.length, 0);
+    const all = new Float32Array(len);
+    let o = 0;
+    for (const b of this.buf) { all.set(b, o); o += b.length; }
+    this.buf = []; this.bytes = 0;
+    this.port.postMessage(all.buffer, [all.buffer]);
+  }
+}
+registerProcessor('polaris-mic', PolarMic);
+`;
+
+function pcmToWav(f32, rate) {
+  const n = f32.length;
+  const buf = new ArrayBuffer(44 + n * 2);
+  const dv = new DataView(buf);
+  const ws = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+  ws(0, 'RIFF'); dv.setUint32(4, 36 + n * 2, true); ws(8, 'WAVE');
+  ws(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+  dv.setUint32(24, rate, true); dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+  ws(36, 'data'); dv.setUint32(40, n * 2, true);
+  let p = 44;
+  for (let i = 0; i < n; i++) {
+    const s = Math.max(-1, Math.min(1, f32[i]));
+    dv.setInt16(p, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    p += 2;
+  }
+  return buf;
+}
 
 async function toggleLive() {
   const btn = $('#trans-live');
   const st = $('#trans-live-status');
-  if (liveRec) {
-    liveRec.stop();
+  if (liveWorklet) {
+    liveSrc.disconnect();
+    await liveCtx.close();
+    liveStream.getTracks().forEach((t) => t.stop());
+    if (liveUrl) URL.revokeObjectURL(liveUrl);
+    liveCtx = liveSrc = liveWorklet = liveStream = liveUrl = null;
+    btn.textContent = 'Start live mic';
+    st.textContent = 'stopped (' + liveChunks + ' chunks)';
     return;
   }
   if (!$('#audio-model').value) { st.textContent = 'pick a whisper model in the Library first'; return; }
@@ -759,37 +809,41 @@ async function toggleLive() {
   }
   liveChunks = 0;
   liveBusy = false;
-  const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((m) => MediaRecorder.isTypeSupported(m)) || '';
-  liveRec = new MediaRecorder(liveStream, mime ? { mimeType: mime } : undefined);
-  liveRec.start(3000);
-  liveRec.ondataavailable = async (e) => {
-    if (!e.data.size || liveBusy) return; // whisper still on the last chunk — drop this one
-    liveBusy = true;
-    liveChunks++;
-    try {
-      const b64 = await new Promise((res, rej) => {
-        const r = new FileReader();
-        r.onload = () => res(String(r.result).split(',')[1]);
-        r.onerror = rej;
-        r.readAsDataURL(e.data);
-      });
-      const r = await api('/api/audio/transcribe', { method: 'POST', body: { audioB64: b64, model: $('#audio-model').value, language: $('#trans-lang').value } });
-      const t = (r.text || '').trim();
-      if (t) {
-        $('#trans-text').value += ($('#trans-text').value ? '\n' : '') + t;
-        if ($('#trans-autocopy').checked) navigator.clipboard.writeText(t);
-      }
-      st.textContent = 'listening… (' + liveChunks + ' chunks)';
-    } catch (err) { st.textContent = 'error: ' + err.message; }
-    finally { liveBusy = false; }
-  };
-  liveRec.onstop = () => {
-    if (liveStream) liveStream.getTracks().forEach((t) => t.stop());
+  try {
+    liveCtx = new AudioContext();
+    liveUrl = URL.createObjectURL(new Blob([MIC_WORKLET], { type: 'application/javascript' }));
+    await liveCtx.audioWorklet.addModule(liveUrl);
+    liveSrc = liveCtx.createMediaStreamSource(liveStream);
+    liveWorklet = new AudioWorkletNode(liveCtx, 'polaris-mic');
+    liveSrc.connect(liveWorklet);
+    liveWorklet.port.onmessage = async (e) => {
+      if (liveBusy) return; // whisper still on the last chunk — drop this one
+      liveBusy = true;
+      liveChunks++;
+      try {
+        const wav = pcmToWav(new Float32Array(e.data), liveCtx.sampleRate);
+        const b64 = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(String(r.result).split(',')[1]);
+          r.onerror = rej;
+          r.readAsDataURL(new Blob([wav], { type: 'audio/wav' }));
+        });
+        const r = await api('/api/audio/transcribe', { method: 'POST', body: { audioB64: b64, model: $('#audio-model').value, language: $('#trans-lang').value } });
+        const t = (r.text || '').trim();
+        if (t) {
+          $('#trans-text').value += ($('#trans-text').value ? '\n' : '') + t;
+          if ($('#trans-autocopy').checked) navigator.clipboard.writeText(t);
+        }
+        st.textContent = 'listening… (' + liveChunks + ' chunks)';
+      } catch (err) { st.textContent = 'error: ' + err.message; }
+      finally { liveBusy = false; }
+    };
+  } catch (e) {
+    liveStream.getTracks().forEach((t) => t.stop());
     liveStream = null;
-    liveRec = null;
-    btn.textContent = 'Start live mic';
-    st.textContent = 'stopped (' + liveChunks + ' chunks)';
-  };
+    st.textContent = 'worklet error: ' + e.message;
+    return;
+  }
   btn.textContent = 'Stop live mic';
   st.textContent = 'listening…';
 }

@@ -34,20 +34,26 @@ for (const type of ['text', 'image', 'video', 'audio']) {
 
 const downloads = new Map(); // id -> Download
 
+let transcribeN = 0;
+
 function transcribe(data) {
   return new Promise((resolve, reject) => {
     const bin = config.get().engines.stt.binary;
     if (!bin || !fs.existsSync(bin)) return reject(new Error(`stt binary missing: ${bin}`));
-    const tmp = path.join(os.tmpdir(), `polaris-stt-${Date.now()}`);
+    const tmp = path.join(os.tmpdir(), `polaris-stt-${Date.now()}-${transcribeN++}`);
     const wav = tmp + '.wav';
-    const raw = Buffer.from(data.audioB64, 'base64');
+    const raw = Buffer.from(data.audioB64 || '', 'base64');
+    if (!raw.length) return reject(new Error('empty audio received'));
     fs.writeFileSync(wav, raw);
     const { spawn, execFile } = require('child_process');
-    // whisper-cli only reads WAV; convert webm/mp3/m4a (mic chunks, uploaded files) with ffmpeg
+    // whisper-cli only reads WAV; convert known non-wav containers (uploads) with ffmpeg
     const convert = () => new Promise((res, rej) => {
       execFile('ffmpeg', ['-y', '-loglevel', 'error', '-i', wav, '-ar', '16000', '-ac', '1', tmp + '.c.wav'], (err) => {
-        if (!err) fs.renameSync(tmp + '.c.wav', wav);
-        err ? rej(new Error('ffmpeg: ' + (err.message || err).slice(0, 200))) : res();
+        if (!err) { fs.renameSync(tmp + '.c.wav', wav); return res(); }
+        try { fs.unlinkSync(wav); } catch (e) { /* ignore */ }
+        try { fs.unlinkSync(tmp + '.c.wav'); } catch (e) { /* ignore */ }
+        const line = String(err.stderr || err.message || '').split('\n')[0].trim();
+        rej(new Error('ffmpeg: ' + (line || 'decode failed').slice(0, 160)));
       });
     });
     const run = () => {
@@ -55,7 +61,7 @@ function transcribe(data) {
       const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       let err = '';
       proc.stderr.on('data', (d) => (err += d.toString()));
-      proc.on('error', reject);
+      proc.on('error', (e) => { try { fs.unlinkSync(wav); } catch (x) { /* ignore */ } reject(e); });
       proc.on('close', (code) => {
         fs.unlinkSync(wav);
         if (code !== 0) return reject(new Error(`whisper-cli exited ${code}: ${err.slice(0, 300)}`));
@@ -65,7 +71,11 @@ function transcribe(data) {
         resolve({ text: text.trim() });
       });
     };
-    const isWav = raw.length >= 12 && raw.toString('ascii', 0, 4) === 'RIFF';
+    const sig = raw.length >= 4 ? raw.toString('latin1', 0, 4) : '';
+    const known = ['RIFF', '\x1aE\xdf\xa3', 'ftyp', 'ID3', '\xff\xfb', '\xff\xf3', 'OggS', 'fLaC'];
+    const isWav = sig === 'RIFF';
+    if (!isWav && !known.some((s) => sig.startsWith(s)))
+      return reject(new Error(`unrecognized audio (got 0x${raw.toString('hex', 0, 8)}) — mic chunk or unsupported file format`));
     (isWav ? Promise.resolve() : convert()).then(run).catch(reject);
   });
 }
