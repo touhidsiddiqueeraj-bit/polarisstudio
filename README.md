@@ -59,6 +59,11 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `engines.video.motionModule` | AnimateDiff motion module `.safetensors` | `null` |
 | `server.enabled` / `server.apiKey` | LAN OpenAI-API exposure (managed via UI) | off |
 
+## Known limitations
+
+- **Log button can be unresponsive** — the engine-log panel sometimes fails to toggle/update; a window reload usually restores it.
+- **Model downloads from HuggingFace are unreliable** — downloads can stall, fail silently, or never appear in the download list, especially from datacenter IPs (HF throttles/401s them). Retrying, or downloading manually via `curl -L -C -` into a configured model directory, is the workaround.
+
 ## Troubleshooting
 
 - **"couldn't bind / address already in use"** — a stale engine from a killed app holds the port. The app detects this, runs `fuser -k <port>/tcp`, and retries.
