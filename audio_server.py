@@ -132,6 +132,8 @@ def find_codec(talker):
 def synth_qwen3(text, talker, lang, voice, out_wav, instr=""):
     if not Q3TTS_BIN or not Path(Q3TTS_BIN).exists():
         raise RuntimeError(f"qwen3 binary missing: {Q3TTS_BIN} (set engines.audio.qwen3Binary)")
+    if "voicedesign" in Path(talker).stem and not instr:
+        raise ValueError("this talker is voice_design-only — fill in the voice prompt")
     cmd = [Q3TTS_BIN, "--model", talker, "--codec", find_codec(talker), "--lang", lang, "-o", str(out_wav)]
     if instr:
         # designer voice (VoiceDesign): prompt wins, refs ignored
