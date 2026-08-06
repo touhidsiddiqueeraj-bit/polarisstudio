@@ -305,7 +305,7 @@ async function api(p, data, url) {
     case '/api/images/img2img': return { body: await engines.image.generateImg2Img(data.prompt, data.opts || {}) };
     case '/api/video/generate': return { body: await engines.video.generateVideo(data.prompt, data.opts || {}) };
     case '/api/audio/voices': return { body: await getJson(engines.audio.baseUrl + '/audio/voices') };
-    case '/api/audio/tts': return { body: await postJson(engines.audio.baseUrl + '/audio/tts', { text: data.text, voice: data.voice, speed: data.speed, format: data.format, model: data.model, lang: data.lang }) };
+    case '/api/audio/tts': return { body: await postJson(engines.audio.baseUrl + '/audio/tts', { text: data.text, voice: data.voice, speed: data.speed, format: data.format, model: data.model, lang: data.lang, instr: data.instr || '' }) };
     case '/api/audio/clone': return { body: await postJson(engines.audio.baseUrl + '/audio/clone', { audioB64: data.audioB64, name: data.name, transcript: data.transcript }) };
     case '/api/audio/delete-clone': return { body: await postJson(engines.audio.baseUrl + '/audio/delete-clone', { name: data.name }) };
     case '/api/audio/transcribe': return { body: await transcribe(data) };

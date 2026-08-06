@@ -129,11 +129,14 @@ def find_codec(talker):
     raise RuntimeError("qwen-tokenizer-12hz GGUF not found next to the talker (or set engines.audio.q3Codec)")
 
 
-def synth_qwen3(text, talker, lang, voice, out_wav):
+def synth_qwen3(text, talker, lang, voice, out_wav, instr=""):
     if not Q3TTS_BIN or not Path(Q3TTS_BIN).exists():
         raise RuntimeError(f"qwen3 binary missing: {Q3TTS_BIN} (set engines.audio.qwen3Binary)")
     cmd = [Q3TTS_BIN, "--model", talker, "--codec", find_codec(talker), "--lang", lang, "-o", str(out_wav)]
-    if voice and voice != "default":
+    if instr:
+        # designer voice (VoiceDesign): prompt wins, refs ignored
+        cmd += ["--instruct", instr]
+    elif voice != "default":
         ref = VOICES_DIR / f"{voice}.wav"
         if not ref.exists():
             raise ValueError(f"unknown voice: {voice}")
@@ -192,6 +195,7 @@ class H(BaseHTTPRequestHandler):
             fmt = str(body.get("format", "wav"))
             model = str(body.get("model", "kokoro"))
             lang = str(body.get("lang", "English"))
+            instr = str(body.get("instr", ""))[:500].strip()
             if not text:
                 return self._json({"error": "empty text"}, 400)
             ts = str(int(time.time() * 1000))
@@ -204,7 +208,7 @@ class H(BaseHTTPRequestHandler):
                         else:
                             sr = synth_xtts(text, voice, speed, wav)
                     else:
-                        sr = synth_qwen3(text, model, lang, voice, wav)
+                        sr = synth_qwen3(text, model, lang, voice, wav, instr)
             except Exception as e:
                 return self._json({"error": str(e)}, 500)
             final = to_mp3(wav, OUT_DIR / f"tts_{ts}.mp3") if fmt == "mp3" else wav

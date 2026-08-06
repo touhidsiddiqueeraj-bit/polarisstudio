@@ -1,17 +1,17 @@
 # PolarisStudio
 
-A local AI studio in the spirit of LM Studio, built on Electron + plain Node.js, driving **llama.cpp** (text) and **stable-diffusion.cpp** (image/video) over local HTTP. Designed around an AMD RX 580 (Polaris) with 8 GB VRAM, but works with any Vulkan device — or CPU.
+A local AI studio in the spirit of LM Studio, built on Electron + plain Node.js, driving **llama.cpp** (text), **stable-diffusion.cpp** (image/video), and **Kokoro-82M / XTTS-v2 / Qwen3-TTS + whisper.cpp** (audio speech) over local HTTP. Designed around an AMD RX 580 (Polaris) with 8 GB VRAM, but works with any Vulkan device — or CPU.
 
-No Python, no CUDA, no cloud. The app is a thin orchestration layer: it spawns engine binaries, proxies their HTTP APIs, and gives you a clean UI for chat, image, video, model library, and HuggingFace downloads.
+No CUDA, no cloud. The app is a thin orchestration layer: it spawns engine binaries, proxies their HTTP APIs, and gives you a clean UI for chat, image, video, TTS/STT, model library, and HuggingFace downloads.
 
 ## Where this fits
 
 The "everything local in one app" space is crowded (LM Studio, Locally Uncensored, LocalGPT, OneAI, LocalAI). PolarisStudio's slot is narrower: **low-VRAM AMD Vulkan, one AppImage, no substrate.**
 
 - **Runs on GPUs everyone else refuses** — the stack (llama.cpp + stable-diffusion.cpp on Vulkan, LCM 4-step, ESRGAN, AnimateDiff) is tuned around an RX 580 / 8 GB-class Polaris GPU. Competitors list NVIDIA 8–12 GB as their floor; this app treats 8 GB Vulkan as home.
-- **Genuinely small** — a ~110 MB AppImage with zero Python, zero Docker, zero ComfyUI graph editor as a hidden dependency. Everything else in this niche ships a multi-hundred-MB-to-GB runtime.
+- **Genuinely small** — a ~110 MB AppImage with zero Docker, zero ComfyUI graph editor as a hidden dependency. The only non-binary runtime is a small Python service for TTS/STT (a venv with Kokoro/XTTS/Qwen3 + whisper.cpp). Everything else in this niche ships a multi-hundred-MB-to-GB runtime.
 - **Model procurement is first-class** — in-app HuggingFace search, per-file exact size + quant level + a "fits / too big for 8 GB" VRAM verdict before you download, then a resumable `.part` download straight into your library.
-- **Engine cockpit, one window** — per-modality (text/image/video) engine status, spawn/kill, and a shared log without leaving the UI.
+- **Engine cockpit, one window** — per-modality (text/image/video/audio) engine status, spawn/kill, and a shared log without leaving the UI.
 
 Expect parity on the common stuff: OpenAI-compatible LAN API, uncensored-model search, chat/images/video generation. The reason to pick PolarisStudio is the hardware it runs on and how little you have to install to get there.
 
@@ -20,7 +20,9 @@ Expect parity on the common stuff: OpenAI-compatible LAN API, uncensored-model s
 - **Chat** — OpenAI-compatible streaming (SSE), markdown rendering, chain-of-thought ("thinking") toggle, ctx/temperature controls, `repeat_penalty` to tame repetitive models, persistent conversation history with rename/delete.
 - **Images** — txt2img and img2img, LCM 4-step sampling, seed/batch/cfg/clip-skip, optional 4× RealESRGAN upscale, save PNG.
 - **Video** — AnimateDiff txt2vid (webm), with a VRAM guard that rejects jobs too large for 8 GB.
+- **Audio** — three TTS backends behind one tab: Kokoro-82M (built-in, 54 voices) + XTTS-v2 voice cloning, and **Qwen3-TTS** (qwentts.cpp on Vulkan) with model selection, 10 languages, **designer voices** (describe the voice in a prompt — `--instruct`, no reference needed) and local voice cloning from any audio clip (mp3/webm/m4a normalized to WAV automatically). Speech-to-text via whisper.cpp for uploaded files **and a live microphone** (3-second chunks stream into the transcript as you speak).
 - **Model library** — scans configured directories recursively, classifies models into text/image/video/aux by filename, delete from disk.
+- **Engine cockpit, one window** — per-modality (text/image/video/audio) engine status, spawn, and **eject** (⏏ unloads the model, freeing VRAM), plus a shared log without leaving the UI.
 - **HuggingFace** — search, browse repo files, resumable downloads (`.part` + range resume, follows the HF→CDN redirect chain), live progress via SSE.
 - **LAN OpenAI server** — optionally rebinds llama-server to `0.0.0.0` with an API key, so other apps/agents on your network can use the same model at `http://<lan-ip>:8080/v1`.
 - **Resilience** — renderer crash recreates the window automatically; closing the window keeps the server + engines + downloads alive (headless mode); stale port conflicts are detected and killed automatically; one engine runs at a time to stay inside VRAM.
@@ -31,6 +33,7 @@ Expect parity on the common stuff: OpenAI-compatible LAN API, uncensored-model s
 - Electron (installed as a dev dependency)
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) — `llama-server` build for text models
 - [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) — `sd-server` build for image/video
+- Audio: a Python 3 venv with `kokoro`, `TTS` (XTTS-v2) and `soundfile`; `ffmpeg` on PATH; [whisper.cpp](https://github.com/ggml-org/whisper.cpp) `whisper-cli`; optionally [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) (Vulkan build) + a `qwen-talker` GGUF + `qwen-tokenizer-12hz` GGUF for Qwen3-TTS
 - A Vulkan GPU (tested on AMD RX 580); CPU-only works but is slow
 
 ## Install & run
@@ -57,7 +60,7 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 
 | Key | Meaning | Default |
 |-----|---------|---------|
-| `modelDirs` | Directories scanned recursively for `.gguf` / `.safetensors` | `~/stable-diffusion.cpp/models` |
+| `modelDirs` | Directories scanned recursively for `.gguf` / `.safetensors` / `.bin` (whisper) | `~/stable-diffusion.cpp/models` |
 | `engines.text.binary` | Path to `llama-server` | `~/llama.cpp/build/bin/llama-server` |
 | `engines.text.port` | Port for the text engine | `8080` |
 | `engines.text.ngl` | GPU layers (`-ngl`) | `99` |
@@ -68,6 +71,13 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `engines.image.port` / `engines.video.port` | Image / video ports | `7800` / `7801` |
 | `engines.image.backend` / `engines.video.backend` | Vulkan backend string | `diffusion=vulkan0,clip=vulkan0,vae=vulkan0` |
 | `engines.video.motionModule` | AnimateDiff motion module `.safetensors` | `null` |
+| `engines.audio.python` | Python interpreter for the TTS/STT service | the app's bundled venv |
+| `engines.audio.binary` | Path to `audio_server.py` | bundled |
+| `engines.audio.port` | Port for the audio engine | `7802` |
+| `engines.audio.sttBinary` | Path to `whisper-cli` | `~/whisper.cpp/build/bin/whisper-cli` |
+| `engines.audio.qwen3Binary` | Path to `qwen-tts` (Qwen3-TTS talker runner) | `''` (off) |
+| `engines.audio.q3Codec` | Path to `qwen-tokenizer-12hz*.gguf` | `''` (auto: next to the talker) |
+| `engines.audio.ggmlBackend` | GGML backend for qwen3 (`Vulkan0`, `CPU`…) | `Vulkan0` |
 | `server.enabled` / `server.apiKey` | LAN OpenAI-API exposure (managed via UI) | off |
 
 ## Known limitations
@@ -95,6 +105,7 @@ lib/config.js      config.json load + defaults
 lib/models.js      model scanning + type classification
 lib/engines.js     Engine class: spawn/health/stop, chat, image, video APIs
 lib/hf.js          HuggingFace search, HTML scrape, resumable downloads
+audio_server.py    TTS/STT service: Kokoro + XTTS-v2 clone + Qwen3-TTS + whisper
 renderer/          The UI: index.html, app.js (vanilla JS), style.css
 preload.js         Legacy bridge, not used by the current UI
 config.json        Machine-specific config (gitignored)

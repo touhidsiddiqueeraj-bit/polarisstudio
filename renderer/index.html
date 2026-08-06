@@ -38,10 +38,10 @@
         <button class="tab" data-tab="library">Library</button>
       </nav>
       <div class="statusbar">
-        <span class="pill" id="st-text">text: idle</span>
-        <span class="pill" id="st-image">image: idle</span>
-        <span class="pill" id="st-video">video: idle</span>
-        <span class="pill" id="st-audio">audio: idle</span>
+        <span class="pill" id="st-text">text: idle</span><button class="btn ghost sm eject" data-engine="text" title="eject model (frees VRAM)" hidden>⏏</button>
+        <span class="pill" id="st-image">image: idle</span><button class="btn ghost sm eject" data-engine="image" title="eject model (frees VRAM)" hidden>⏏</button>
+        <span class="pill" id="st-video">video: idle</span><button class="btn ghost sm eject" data-engine="video" title="eject model (frees VRAM)" hidden>⏏</button>
+        <span class="pill" id="st-audio">audio: idle</span><button class="btn ghost sm eject" data-engine="audio" title="eject model (frees VRAM)" hidden>⏏</button>
         <button id="log-toggle" class="btn ghost sm" title="toggle engine log">log</button>
       </div>
     </header>
@@ -204,6 +204,9 @@
           </label>
           <label id="tts-lang-row" hidden>language
             <select id="tts-lang" class="select"></select>
+          </label>
+          <label id="tts-prompt-row" hidden>voice prompt (Qwen3 designer voice)
+            <input id="tts-voice-prompt" type="text" placeholder="e.g. a calm elderly male narrator, deep and warm" class="input">
           </label>
           <div class="grid2">
             <label>voice

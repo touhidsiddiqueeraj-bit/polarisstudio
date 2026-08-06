@@ -151,6 +151,7 @@ function bindUI() {
     loadAudioVoices();
   });
   $('#audio-gen').addEventListener('click', generateTTS);
+  document.querySelectorAll('.eject').forEach((b) => b.addEventListener('click', () => ejectEngine(b.dataset.engine)));
   $('#tts-model').addEventListener('change', () => { switchAudioBackend(); setPill('st-audio', ttsPillLabel()); });
   $('#audio-save').addEventListener('click', saveAudio);
   $('#clone-go').addEventListener('click', cloneVoice);
@@ -317,6 +318,7 @@ function fillTTSModels(audioModels) {
 function switchAudioBackend() {
   const q3 = $('#tts-model').value !== 'kokoro';
   $('#tts-lang-row').hidden = !q3;
+  $('#tts-prompt-row').hidden = !q3;
   $('#clone-text-row').hidden = !q3;
   if (q3 && !$('#tts-lang').options.length) {
     for (const l of Q3_LANGS) $('#tts-lang').append(new Option(l, l));
@@ -397,6 +399,17 @@ function setPill(id, text, running) {
   const p = $('#' + id);
   p.textContent = text;
   p.classList.toggle('running', !!running);
+  const ej = document.querySelector('.eject[data-engine="' + id.slice(3) + '"]');
+  if (ej) ej.hidden = !running;
+}
+
+async function ejectEngine(type) {
+  const pill = $('#st-' + type);
+  setPill('st-' + type, 'ejecting…');
+  try {
+    await api('/api/engine/stop', { method: 'POST', body: { type } });
+  } catch (e) { setPill('st-' + type, 'failed'); showErr('eject ' + type + ': ' + e.message); return; }
+  refreshEngineStatus();
 }
 
 function ttsPillLabel() {
@@ -667,7 +680,7 @@ async function generateTTS() {
   const st = $('#audio-status');
   st.textContent = 'synthesizing…';
   try {
-    const r = await api('/api/audio/tts', { method: 'POST', body: { text, voice: $('#audio-voice').value, speed: +$('#audio-speed').value, format: $('#audio-format').value, model: $('#tts-model').value, lang: $('#tts-lang').value || 'English' } });
+    const r = await api('/api/audio/tts', { method: 'POST', body: { text, voice: $('#audio-voice').value, speed: +$('#audio-speed').value, format: $('#audio-format').value, model: $('#tts-model').value, lang: $('#tts-lang').value || 'English', instr: $('#tts-voice-prompt').value.trim() } });
     if (r.error) throw new Error(r.error);
     window.__lastAudio = { data: r.audioB64, ext: $('#audio-format').value };
     const box = $('#audio-preview');
@@ -808,7 +821,7 @@ async function toggleLive() {
         const r = await api('/api/audio/transcribe', { method: 'POST', body: { audioB64: b64, model: $('#audio-model').value, language: $('#trans-lang').value } });
         const t = (r.text || '').trim();
         if (t) {
-          $('#trans-text').value += ($('#trans-text').value ? '\n' : '') + t;
+          $('#trans-text').value += ($('#trans-text').value ? ' ' : '') + t;
           if ($('#trans-autocopy').checked) navigator.clipboard.writeText(t);
         }
         st.textContent = 'listening… (' + liveChunks + ' chunks)';
