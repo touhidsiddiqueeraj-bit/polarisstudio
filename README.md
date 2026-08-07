@@ -73,7 +73,7 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `engines.text.cacheTypeK` / `engines.text.cacheTypeV` | KV cache quantization (`--cache-type-k/v`; `f16`/`q8_0`/`q4_0`) | `f16` |
 | `engines.text.extraArgs` | Extra llama-server flags | `["--flash-attn","on","--jinja"]` |
 | `engines.text.host` | `127.0.0.1`, or `0.0.0.0` when LAN server enabled | `0.0.0.0` |
-| `engines.text.mmproj` | Optional explicit vision projector; otherwise auto-discovered (`mmproj*` next to the model) | auto |
+| `engines.text.mmproj` | Optional explicit vision projector; otherwise auto-discovered only when an `mmproj-*.gguf` **shares the model's family name** (quant suffixes ignored, e.g. `gemma-4-E4B-it-Q4_0.gguf` ↔ `mmproj-gemma-4-E4B-it-Q8_0.gguf`). Unrelated projectors are never attached. | auto |
 | `engines.image.binary` / `engines.video.binary` | Path to `sd-server` | `~/stable-diffusion.cpp/build/bin/sd-server` |
 | `engines.image.port` / `engines.video.port` | Image / video ports | `7800` / `7801` |
 | `engines.image.backend` / `engines.video.backend` | Vulkan backend string | `diffusion=vulkan0,clip=vulkan0,vae=vulkan0` |
