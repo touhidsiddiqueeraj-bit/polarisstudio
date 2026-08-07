@@ -45,6 +45,7 @@ let conversations = [];
 let activeConv = null;
 let chatStreaming = false;
 let abortChat = null;
+let pendingImages = []; // data-URLs attached to the chat input, awaiting send
 let evSource = null;
 
 // ---------------- init ----------------
@@ -88,6 +89,21 @@ function bindUI() {
   $('#chat-send').addEventListener('click', sendChat);
   $('#chat-input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  $('#chat-input').addEventListener('paste', (e) => {
+    for (const item of e.clipboardData.items) {
+      if (item.type.startsWith('image/')) addImage(item.getAsFile());
+    }
+  });
+  $('#chat-input').closest('.chat-inputbar').addEventListener('dragover', (e) => e.preventDefault());
+  $('#chat-input').closest('.chat-inputbar').addEventListener('drop', (e) => {
+    e.preventDefault();
+    for (const f of e.dataTransfer.files) if (f.type.startsWith('image/')) addImage(f);
+  });
+  $('#chat-attach-btn').addEventListener('click', () => $('#chat-attach').click());
+  $('#chat-attach').addEventListener('change', (e) => {
+    for (const f of e.target.files) addImage(f);
+    e.target.value = '';
   });
   $('#chat-stop').addEventListener('click', () => { if (abortChat) abortChat(); });
   $('#chat-clear').addEventListener('click', () => { if (activeConv) { activeConv.messages = []; persistConv(); renderChat(); } });
@@ -426,19 +442,80 @@ async function refreshEngineStatus() {
 }
 
 // ---------------- chat ----------------
+function shrinkImage(dataUrl, maxSide = 1024) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, maxSide / Math.max(img.width, img.height));
+      if (s >= 1) return resolve(dataUrl);
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * s);
+      c.height = Math.round(img.height * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
+function addImage(file) {
+  if (!file) return;
+  const r = new FileReader();
+  r.onload = async () => {
+    const small = await shrinkImage(r.result);
+    if (!small) return;
+    pendingImages.push(small);
+    renderThumbs();
+  };
+  r.readAsDataURL(file);
+}
+
+function renderThumbs() {
+  const box = $('#chat-thumbs');
+  box.hidden = !pendingImages.length;
+  box.innerHTML = '';
+  pendingImages.forEach((src, i) => {
+    const t = el('div', 'thumb', null);
+    t.append(Object.assign(document.createElement('img'), { src }));
+    const x = el('button', null, '×');
+    x.addEventListener('click', () => { pendingImages.splice(i, 1); renderThumbs(); });
+    t.append(x);
+    box.append(t);
+  });
+  if (!pendingImages.length) $('#chat-input').focus();
+}
+
+function contentParts(text) {
+  if (!pendingImages.length) return text;
+  const parts = pendingImages.map((u) => ({ type: 'image_url', image_url: { url: u } }));
+  if (text) parts.push({ type: 'text', text });
+  return parts;
+}
+
+// message content may be a plain string or a parts array (text + images)
+function contentText(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.filter((p) => p.type === 'text').map((p) => p.text).join('\n');
+  return String(content || '');
+}
+
 async function sendChat() {
   const input = $('#chat-input');
   const text = input.value.trim();
-  if (!text || chatStreaming) return;
+  if ((!text && !pendingImages.length) || chatStreaming) return;
   const modelPath = $('#chat-model').value;
   if (!modelPath) { appendLog('system', 'no model selected'); return; }
 
+  const userContent = contentParts(text);
   input.value = '';
-  activeConv.messages.push({ role: 'user', content: text });
-  if (activeConv.title === 'New chat') activeConv.title = text.slice(0, 40);
+  pendingImages = [];
+  renderThumbs();
+  activeConv.messages.push({ role: 'user', content: userContent });
+  if (activeConv.title === 'New chat') activeConv.title = (text || 'image').slice(0, 40);
   persistConv();
   renderConvList();
-  renderMsg('user', text);
+  renderMsg('user', userContent);
 
   const ctx = Number($('#chat-ctx').value) || 8192;
   const temp = Number($('#chat-temp').value) || 0.7;
@@ -501,9 +578,25 @@ async function sendChat() {
   }
 }
 
-function renderMsg(role, text) {
-  const m = el('div', 'msg ' + role, text);
-  if (role === 'assistant') m.classList.add('md');
+function renderMsg(role, content) {
+  const m = el('div', 'msg ' + role);
+  if (role === 'assistant') {
+    m.classList.add('md');
+    m.innerHTML = md(contentText(content));
+  } else if (Array.isArray(content)) {
+    for (const p of content) {
+      if (p.type === 'image_url') {
+        const img = document.createElement('img');
+        img.src = p.image_url.url;
+        img.className = 'attached-img';
+        m.append(img);
+      } else if (p.type === 'text') {
+        m.append(document.createTextNode(p.text));
+      }
+    }
+  } else {
+    m.textContent = contentText(content);
+  }
   $('#chat-messages').append(m);
   scrollChat();
 }

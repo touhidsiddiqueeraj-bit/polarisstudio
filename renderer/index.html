@@ -64,10 +64,15 @@
         <span id="srv-url" class="muted"></span>
       </div>
       <div class="chat-inputbar">
-        <textarea id="chat-input" rows="2" placeholder="Message the model… (Enter to send, Shift+Enter for newline)"></textarea>
+        <div id="chat-thumbs" class="chat-thumbs" hidden></div>
+        <div class="chat-inputrow">
+        <textarea id="chat-input" rows="2" placeholder="Message the model… (Enter to send, Shift+Enter for newline; paste/drop an image to attach)"></textarea>
         <div class="chat-actions">
+          <input id="chat-attach" type="file" accept="image/*" multiple hidden>
+          <button id="chat-attach-btn" class="btn ghost" title="Attach image">Attach</button>
           <button id="chat-send" class="btn primary">Send</button>
           <button id="chat-stop" class="btn ghost" disabled>Stop</button>
+        </div>
         </div>
       </div>
     </section>

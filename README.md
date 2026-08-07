@@ -18,6 +18,7 @@ Expect parity on the common stuff: OpenAI-compatible LAN API, uncensored-model s
 ## Features
 
 - **Chat** — OpenAI-compatible streaming (SSE), markdown rendering, chain-of-thought ("thinking") toggle, ctx/temperature controls, `repeat_penalty` to tame repetitive models, persistent conversation history with rename/delete.
+- **Vision** — paste, drop, or attach an image into chat; the model sees it via a multimodal projector. `--mmproj` is auto-discovered next to the model file, and a bundled MCP server (`mcp-server.js`) exposes `describe_image` to coding agents.
 - **Images** — txt2img and img2img, LCM 4-step sampling, seed/batch/cfg/clip-skip, optional 4× RealESRGAN upscale, save PNG.
 - **Video** — AnimateDiff txt2vid (webm), with a VRAM guard that rejects jobs too large for 8 GB.
 - **Audio** — three TTS backends behind one tab: Kokoro-82M (built-in, 54 voices) + XTTS-v2 voice cloning, and **Qwen3-TTS** (qwentts.cpp on Vulkan) with model selection, 10 languages, **designer voices** (describe the voice in a prompt — `--instruct`, no reference needed) and local voice cloning from any audio clip (mp3/webm/m4a normalized to WAV automatically). Speech-to-text via whisper.cpp for uploaded files **and a live microphone** (3-second chunks stream into the transcript as you speak).
@@ -67,6 +68,7 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `engines.text.ctx` | Context size | `8192` |
 | `engines.text.extraArgs` | Extra llama-server flags | `["--flash-attn","on","--jinja"]` |
 | `engines.text.host` | `127.0.0.1`, or `0.0.0.0` when LAN server enabled | `0.0.0.0` |
+| `engines.text.mmproj` | Optional explicit vision projector; otherwise auto-discovered (`mmproj*` next to the model) | auto |
 | `engines.image.binary` / `engines.video.binary` | Path to `sd-server` | `~/stable-diffusion.cpp/build/bin/sd-server` |
 | `engines.image.port` / `engines.video.port` | Image / video ports | `7800` / `7801` |
 | `engines.image.backend` / `engines.video.backend` | Vulkan backend string | `diffusion=vulkan0,clip=vulkan0,vae=vulkan0` |
@@ -84,10 +86,39 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 
 - **Model downloads from HuggingFace are unreliable** — downloads can stall, fail silently, or never appear in the download list, especially from datacenter IPs (HF throttles/401s them). Retrying, or downloading manually via `curl -L -C -` into a configured model directory, is the workaround.
 - **No cancel button for in-flight downloads** — once a download is queued there is no way to abort it from the UI; it runs to completion (or stalls). Restarting the app is the only out.
+- **Vision needs a multimodal model** — chat attachments only work when the loaded text model has an `mmproj` projector next to it (e.g. an official Gemma/SmolVLM GGUF + its `mmproj-*.gguf` in the same directory). Plain text-only GGUFs ignore attached images.
+
+## Vision / agent API (`/api/vision`)
+
+A JSON `POST /api/vision` endpoint lets external agents send images to the local multimodal LLM without touching the UI. It auto-starts/stops the text engine (and frees other engines' VRAM first) and returns a plain text description.
+
+```bash
+curl -X POST http://127.0.0.1:9090/api/vision \
+  -H 'Content-Type: application/json' \
+  -d '{"modelPath":"/path/to/gemma-4-E4B-it-Q4_0.gguf","prompt":"Describe this image in one sentence.","images":["data:image/png;base64,...."]}'
+# => {"text":"A smooth, vibrant gradient..."}
+```
+
+The bundled `mcp-server.js` wraps this as an MCP tool (`describe_image`) for coding agents. Register it in opencode with:
+
+```json
+{
+  "mcp": {
+    "polaris-vision": {
+      "type": "local",
+      "command": ["node", "/path/to/PolarisStudio/mcp-server.js"],
+      "enabled": true
+    }
+  }
+}
+```
+
+The default model is the official `gemma-4-E4B-it` GGUF; override per-call with `modelPath` or globally with the `POLARIS_VISION_MODEL` env var.
 
 ## Resolved
 
 - **Log button unresponsive** — the engine-log panel appeared dead because the `footer.logbar` sat below the viewport: `.app` was fixed at `100vh` and `body { overflow: hidden }` clipped it. The app body is now a flex column and the panel slides into view on toggle (build 4+).
+- **All buttons dead after the vision update** — `sendChat` declared `const content` for the user message while the streaming accumulator below used `let content`, a redeclaration that killed the whole script (SyntaxError at parse time → zero event listeners attached). The user-message variable was renamed `userContent`.
 
 ## Troubleshooting
 
@@ -103,10 +134,11 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 main.js            Electron main: HTTP server, routing, engine lifecycle, SSE
 lib/config.js      config.json load + defaults
 lib/models.js      model scanning + type classification
-lib/engines.js     Engine class: spawn/health/stop, chat, image, video APIs
+lib/engines.js     Engine class: spawn/health/stop, chat, vision, image, video APIs
 lib/hf.js          HuggingFace search, HTML scrape, resumable downloads
 audio_server.py    TTS/STT service: Kokoro + XTTS-v2 clone + Qwen3-TTS + whisper
 renderer/          The UI: index.html, app.js (vanilla JS), style.css
+mcp-server.js      Vision MCP server for coding agents (describe_image)
 preload.js         Legacy bridge, not used by the current UI
 config.json        Machine-specific config (gitignored)
 conversations.json Chat history (gitignored)

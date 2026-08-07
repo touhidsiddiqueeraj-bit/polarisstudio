@@ -205,11 +205,23 @@ textarea { resize: vertical; font-family: inherit; }
 .serverbar .input { width: 160px; margin-top: 0; }
 
 .chat-inputbar {
-  display: flex; gap: 10px; padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 16px;
   border-top: 1px solid var(--line); background: var(--bg2);
 }
-.chat-inputbar textarea { flex: 1; background: var(--bg); }
-.chat-actions { display: flex; flex-direction: column; gap: 6px; }
+.chat-inputrow { display: flex; gap: 10px; }
+.chat-inputrow textarea { flex: 1; background: var(--bg); }
+.chat-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.chat-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+.chat-thumbs .thumb {
+  position: relative; width: 72px; height: 72px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.chat-thumbs .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.chat-thumbs .thumb button {
+  position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; line-height: 14px;
+  padding: 0; border: 0; border-radius: 4px; cursor: pointer; background: rgba(0,0,0,.6); color: #fff;
+}
+.msg .attached-img { max-width: 320px; max-height: 240px; border-radius: 8px; display: block; margin: 6px 0; }
 
 /* ---------------- image / video ---------------- */
 .side-by-side { display: flex; flex: 1; min-height: 0; }

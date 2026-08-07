@@ -279,6 +279,24 @@ async function api(p, data, url) {
       await engines[data.type].stop();
       return { body: engines[data.type].status() };
     }
+    case '/api/vision': {
+      // modelPath, prompt, images[] (data URLs) -> {text}
+      if (!data.modelPath) return { status: 400, body: { error: 'no modelPath' } };
+      if (!(data.images || []).length) return { status: 400, body: { error: 'no images' } };
+      const engine = engines.text;
+      for (const t of ['text', 'image', 'video']) {
+        if (t !== 'text' && engines[t].isRunning()) {
+          await engines[t].stop();
+          broadcast({ type: 'engine:log', typeName: 'system', line: `stopped ${t} engine to free VRAM` });
+        }
+      }
+      if (engine.isRunning() && engine.model !== path.basename(data.modelPath)) await engine.stop();
+      if (!engine.isRunning()) await engine.start(data.modelPath, { ctx: data.ctx || 8192 });
+      const parts = (data.images || []).map((u) => ({ type: 'image_url', image_url: { url: u } }));
+      if (data.prompt) parts.push({ type: 'text', text: data.prompt });
+      const text = await engine.complete([{ role: 'user', content: parts }], { thinking: false, maxTokens: 1024 });
+      return { body: { text } };
+    }
     case '/api/models': return { body: models.list(config.get().modelDirs) };
     case '/api/models/delete': { await models.remove(data.path); return { body: true }; }
     case '/api/hf/search': return { body: await hf.search(url.searchParams.get('q') || '') };
