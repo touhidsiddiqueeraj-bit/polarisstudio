@@ -107,12 +107,16 @@ function bindUI() {
   });
   $('#chat-stop').addEventListener('click', () => { if (abortChat) abortChat(); });
   $('#chat-clear').addEventListener('click', () => { if (activeConv) { activeConv.messages = []; persistConv(); renderChat(); } });
-  $('#chat-model').addEventListener('change', (e) => { if (activeConv) { activeConv.model = e.target.value; persistConv(); } });
+  $('#chat-model').addEventListener('change', (e) => {
+    const m = modelById(e.target.value);
+    $('#chat-moe-wrap').hidden = !(m && m.moe);
+    if (activeConv) { activeConv.model = e.target.value; persistConv(); }
+  });
   $('#chat-thinking').addEventListener('change', () => { if (activeConv) { activeConv.thinking = $('#chat-thinking').checked; persistConv(); } });
   $('#app-quit').addEventListener('click', async () => { try { await api('/api/quit', { method: 'POST' }); } catch (e) { location.reload(); } });
   $('#chat-start-engine').addEventListener('click', async () => {
     const m = modelById($('#chat-model').value);
-    if (m) { await startEngine('text', m, { ctx: +$('#chat-ctx').value || 8192 }); refreshEngineStatus(); }
+    if (m) { await startEngine('text', m, { ctx: +$('#chat-ctx').value || 8192, nCpuMoe: +$('#chat-moe').value || 0 }); refreshEngineStatus(); }
   });
 
   $('#conv-new').addEventListener('click', newConversation);
@@ -295,6 +299,7 @@ function renderConvList() {
 function renderChat() {
   $('#chat-messages').innerHTML = '';
   $('#chat-model').value = activeConv.model;
+  $('#chat-moe-wrap').hidden = !(modelById(activeConv.model) || {}).moe;
   $('#chat-thinking').checked = !!activeConv.thinking;
   for (const m of activeConv.messages) renderMsg(m.role, m.content);
   scrollChat();
@@ -308,6 +313,7 @@ async function refreshLocal() {
   const byType = { text: [], image: [], video: [], aux: [], audio: [] };
   for (const m of localModels) byType[m.type].push(m);
   fillSelect('#chat-model', byType.text, 'no text models in library');
+  $('#chat-moe-wrap').hidden = !(modelById($('#chat-model').value) || {}).moe;
   fillSelect('#img-model', byType.image, 'no image models — SD1.5 gguf expected');
   fillSelect('#vid-model', byType.video.length ? byType.video : byType.image, byType.video.length ? '' : 'using image models (AnimateDiff mode)');
   if ($('#audio-model')) fillSelect('#audio-model', byType.audio.filter((m) => /whisper|ggml-/.test(m.name)), 'no audio models — download a whisper gguf from HF');
