@@ -56,6 +56,7 @@
         <label class="field-inline" id="chat-moe-wrap" title="MoE models only — offload N expert blocks to system RAM to free VRAM. Increase if you hit OOM, decrease for more speed if VRAM allows." hidden>MoE CPU <input id="chat-moe" type="number" value="0" min="0" step="1" class="num"></label>
         <label class="check" title="load weights without mmap — slower start, but works on filesystems without mmap and can lower memory spikes"><input id="chat-nommap" type="checkbox"> no-mmap</label>
         <label class="check" title="lock weights in RAM — prevents swapping/OOM-kill of the process (uses more system RAM)"><input id="chat-mlock" type="checkbox"> mlock</label>
+        <label class="check" title="read weights with direct I/O — bypasses page cache (needs filesystem support; slower if weights are re-read often)"><input id="chat-dio" type="checkbox"> direct-io</label>
         <label class="check" title="model reasoning / chain-of-thought"><input id="chat-thinking" type="checkbox" checked> thinking</label>
         <button id="chat-clear" class="btn ghost">Clear</button>
       </div>
