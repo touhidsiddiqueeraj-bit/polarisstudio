@@ -116,7 +116,7 @@ function bindUI() {
   $('#app-quit').addEventListener('click', async () => { try { await api('/api/quit', { method: 'POST' }); } catch (e) { location.reload(); } });
   $('#chat-start-engine').addEventListener('click', async () => {
     const m = modelById($('#chat-model').value);
-    if (m) { await startEngine('text', m, { ctx: +$('#chat-ctx').value || 8192, nCpuMoe: +$('#chat-moe').value || 0 }); refreshEngineStatus(); }
+    if (m) { await startEngine('text', m, { ctx: +$('#chat-ctx').value || 8192, nCpuMoe: +$('#chat-moe').value || 0, noMmap: $('#chat-nommap').checked }); refreshEngineStatus(); }
   });
 
   $('#conv-new').addEventListener('click', newConversation);

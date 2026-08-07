@@ -54,6 +54,7 @@
         <label class="field-inline">ctx <input id="chat-ctx" type="number" value="8192" min="512" step="512" class="num"></label>
         <label class="field-inline">temp <input id="chat-temp" type="number" value="0.7" min="0" max="2" step="0.05" class="num"></label>
         <label class="field-inline" id="chat-moe-wrap" title="MoE models only — offload N expert blocks to system RAM to free VRAM. Increase if you hit OOM, decrease for more speed if VRAM allows." hidden>MoE CPU <input id="chat-moe" type="number" value="0" min="0" step="1" class="num"></label>
+        <label class="check" title="load weights without mmap — slower start, but works on filesystems without mmap and can lower memory spikes"><input id="chat-nommap" type="checkbox"> no-mmap</label>
         <label class="check" title="model reasoning / chain-of-thought"><input id="chat-thinking" type="checkbox" checked> thinking</label>
         <button id="chat-clear" class="btn ghost">Clear</button>
       </div>
