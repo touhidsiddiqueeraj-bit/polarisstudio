@@ -57,6 +57,7 @@
         <label class="check" title="load weights without mmap — slower start, but works on filesystems without mmap and can lower memory spikes"><input id="chat-nommap" type="checkbox"> no-mmap</label>
         <label class="check" title="lock weights in RAM — prevents swapping/OOM-kill of the process (uses more system RAM)"><input id="chat-mlock" type="checkbox"> mlock</label>
         <label class="check" title="read weights with direct I/O — bypasses page cache (needs filesystem support; slower if weights are re-read often)"><input id="chat-dio" type="checkbox"> direct-io</label>
+        <label class="field-inline" title="KV cache quantization — q8_0/q4_0 cut cache VRAM at slight quality loss (applies to both K and V)">KV cache <select id="chat-kv" class="select kv"><option value="f16">f16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option></select></label>
         <label class="check" title="model reasoning / chain-of-thought"><input id="chat-thinking" type="checkbox" checked> thinking</label>
         <button id="chat-clear" class="btn ghost">Clear</button>
       </div>

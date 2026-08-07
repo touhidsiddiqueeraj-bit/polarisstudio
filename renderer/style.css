@@ -169,6 +169,7 @@ textarea { resize: vertical; font-family: inherit; }
   padding: 10px 16px; border-bottom: 1px solid var(--line);
 }
 .chat-toolbar .select { width: 240px; margin-top: 0; }
+.chat-toolbar .select.kv { width: 74px; }
 .chat-toolbar .field-inline .num { width: 72px; }
 
 .messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
