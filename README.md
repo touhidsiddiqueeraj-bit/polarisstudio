@@ -66,6 +66,11 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `engines.text.port` | Port for the text engine | `8080` |
 | `engines.text.ngl` | GPU layers (`-ngl`) | `99` |
 | `engines.text.ctx` | Context size | `8192` |
+| `engines.text.nCpuMoe` | MoE experts offloaded to CPU (`--n-cpu-moe`; UI slider, MoE models only) | `0` |
+| `engines.text.noMmap` | Load weights without mmap (`--no-mmap`) | `false` |
+| `engines.text.mlock` | Lock weights in RAM (`--mlock`) | `false` |
+| `engines.text.directIo` | Bypass page cache on weight reads (`--direct-io`) | `false` |
+| `engines.text.cacheTypeK` / `engines.text.cacheTypeV` | KV cache quantization (`--cache-type-k/v`; `f16`/`q8_0`/`q4_0`) | `f16` |
 | `engines.text.extraArgs` | Extra llama-server flags | `["--flash-attn","on","--jinja"]` |
 | `engines.text.host` | `127.0.0.1`, or `0.0.0.0` when LAN server enabled | `0.0.0.0` |
 | `engines.text.mmproj` | Optional explicit vision projector; otherwise auto-discovered (`mmproj*` next to the model) | auto |
@@ -122,6 +127,7 @@ The default model is the official `gemma-4-E4B-it` GGUF; override per-call with 
 
 ## Troubleshooting
 
+- **MoE model too slow / out of VRAM** — raise **MoE CPU** (offloads expert blocks to system RAM), or switch **KV cache** to `q8_0`/`q4_0` to shrink cache VRAM. Toggles apply per session from the chat toolbar. (Deprecated `--no-mmap`/`--mlock`/`--direct-io` still work in llama-server; a one-line deprecation warning in the log is expected.)
 - **"couldn't bind / address already in use"** — a stale engine from a killed app holds the port. The app detects this, runs `fuser -k <port>/tcp`, and retries.
 - **Downloads stall or fail** — this machine's IP may be throttled by HuggingFace (datacenter IPs get 401 on the API; the app falls back to scraping the public HTML tree page). Downloads resume via `.part` files; the retry restarts from where it stopped.
 - **Model repeats itself / loops** — `repeat_penalty: 1.1` is sent by default on every chat request; raise `temperature` if a model is still degenerate.
