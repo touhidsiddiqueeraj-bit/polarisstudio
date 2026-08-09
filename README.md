@@ -93,18 +93,15 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 - **No cancel button for in-flight downloads** — once a download is queued there is no way to abort it from the UI; it runs to completion (or stalls). Restarting the app is the only out.
 - **Vision needs a multimodal model** — chat attachments only work when the loaded text model has an `mmproj` projector next to it (e.g. an official Gemma/SmolVLM GGUF + its `mmproj-*.gguf` in the same directory). Plain text-only GGUFs ignore attached images.
 
-## Vision / agent API (`/api/vision`)
+## Vision / agent API (`/api/vision`) + MCP server
 
-A JSON `POST /api/vision` endpoint lets external agents send images to the local multimodal LLM without touching the UI. It auto-starts/stops the text engine (and frees other engines' VRAM first) and returns a plain text description.
+A JSON `POST /api/vision` endpoint lets external agents send images to the local multimodal LLM without touching the UI. It auto-starts/stops the text engine (and frees other engines' VRAM first) and returns a plain text description. The bundled `mcp-server.js` wraps this as an MCP tool (`describe_image`) for coding agents.
 
-```bash
-curl -X POST http://127.0.0.1:9090/api/vision \
-  -H 'Content-Type: application/json' \
-  -d '{"modelPath":"/path/to/gemma-4-E4B-it-Q4_0.gguf","prompt":"Describe this image in one sentence.","images":["data:image/png;base64,...."]}'
-# => {"text":"A smooth, vibrant gradient..."}
-```
+### Getting the MCP working — quick start
 
-The bundled `mcp-server.js` wraps this as an MCP tool (`describe_image`) for coding agents. Register it in opencode with:
+1. **Start the app** — `npm start`. The MCP proxies to `http://127.0.0.1:9090`, so PolarisStudio must be running (closing the window is fine — the server stays up headless).
+2. **Have a multimodal model** — a GGUF with vision, plus its `mmproj-*.gguf` **in the same directory** (auto-discovered, e.g. `gemma-4-E4B-it-Q4_0.gguf` + `mmproj-gemma-4-E4B-it-Q8_0.gguf`). Plain text-only GGUFs can't see images.
+3. **Register the server** in your MCP client, e.g. opencode (`opencode.json`, project or `~/.config/opencode/`):
 
 ```json
 {
@@ -118,7 +115,28 @@ The bundled `mcp-server.js` wraps this as an MCP tool (`describe_image`) for cod
 }
 ```
 
-The default model is the official `gemma-4-E4B-it` GGUF; override per-call with `modelPath` or globally with the `POLARIS_VISION_MODEL` env var.
+4. **Use it** — ask your agent to describe an image file; the tool takes a file path, `file://` URL, or base64 data URI, plus an optional `prompt` and `modelPath`.
+
+### Configuration
+
+| Variable | Meaning | Default |
+|----------|---------|---------|
+| `POLARIS_VISION_MODEL` | Vision model GGUF used when `modelPath` is not passed | `gemma-4-E4B-it-Q4_0.gguf` (path hardcoded in `mcp-server.js`) |
+| `POLARIS_PORT` | PolarisStudio UI server port | `9090` |
+
+### Testing without an agent
+
+```bash
+# needs a base64 data URI of your image
+curl -X POST http://127.0.0.1:9090/api/vision \
+  -H 'Content-Type: application/json' \
+  -d '{"modelPath":"/path/to/gemma-4-E4B-it-Q4_0.gguf","prompt":"Describe this image in one sentence.","images":["data:image/png;base64,...."]}'
+# => {"text":"A smooth, vibrant gradient..."}
+```
+
+### How cold start works
+
+The first request starts the text engine if it isn't running (model load takes a few seconds). During loading, llama-server answers 503 `"Loading model"`; PolarisStudio waits for a real 200 before sending your image, and `mcp-server.js` additionally retries transient `"Loading model"` / `ECONNREFUSED` responses with backoff (5 attempts) — so a cold start succeeds automatically, just slower. If you still see errors: `ECONNREFUSED` means the app isn't running (step 1); `"model missing"` means the `modelPath` GGUF doesn't exist.
 
 ## Resolved
 

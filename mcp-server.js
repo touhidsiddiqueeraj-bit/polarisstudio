@@ -59,9 +59,21 @@ async function call(params) {
   const a = (params && params.arguments) || {};
   const image = resolveImage(a.image);
   const body = { images: [image], prompt: a.prompt || 'Describe this image in detail.', modelPath: a.modelPath || VISION_MODEL };
-  const r = await postJson('/api/vision', body);
-  if (r.error) throw new Error(r.error);
-  return { content: [{ type: 'text', text: r.text || '(empty response)' }], isError: false };
+  // ponytail: cold-start retry — the first request can hit a llama-server that
+  // is still loading the model (503 "Loading model"), or the UI server mid-restart
+  let lastErr;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const r = await postJson('/api/vision', body);
+      if (!r.error) return { content: [{ type: 'text', text: r.text || '(empty response)' }], isError: false };
+      lastErr = new Error(r.error);
+    } catch (e) {
+      lastErr = e;
+    }
+    if (!/loading model|ECONNREFUSED/i.test(String(lastErr.message))) break;
+    await new Promise((res) => setTimeout(res, 3000 * (attempt + 1)));
+  }
+  throw lastErr;
 }
 
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -73,7 +85,7 @@ rl.on('line', async (line) => {
   const fail = (m) => reply({ error: { code: -32603, message: 'polaris-vision: ' + m } });
   try {
     if (method === 'initialize') {
-      return reply({ result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'polaris-vision', version: '1.0.0' } } });
+      return reply({ result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'polaris-vision', version: '1.1.0' } } });
     }
     if (method !== 'tools/list' && method !== 'tools/call') return; // notifications + anything else: no-op
     if (method === 'tools/list') return reply({ result: { tools: TOOLS } });
