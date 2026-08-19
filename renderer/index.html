@@ -2,15 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self'; connect-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* http://localhost:* https://huggingface.co">
 <title>PolarisStudio</title>
+<link rel="stylesheet" href="vendor/katex.min.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="app">
 
   <!-- ============ SIDEBAR ============ -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="brand">
       <div class="logo">&#9733;</div>
       <div>
@@ -18,12 +19,23 @@
         <div class="brand-sub">local AI · Vulkan</div>
       </div>
     </div>
-    <button id="conv-new" class="btn new-chat">+ New chat</button>
+    <button id="conv-new" class="btn new-chat"><span>+ New chat</span></button>
+    <input id="conv-search" class="conv-search" placeholder="Search chats…" autocomplete="off">
     <div id="conv-list" class="conv-list"></div>
     <div class="sidebar-foot">
-      <div class="pill pill-gpu">RX 580 · Vulkan</div>
-      <div class="pill" id="build-tag">build 4</div>
-      <button id="app-quit" class="btn ghost sm" title="quit the app">Quit</button>
+      <div class="sidebar-foot-row">
+        <div class="pill pill-gpu">RX 580 · Vulkan</div>
+        <div class="pill" id="build-tag">build 8</div>
+      </div>
+      <div class="theme-toggle" id="theme-toggle">
+        <button data-theme="auto" class="active">Auto</button>
+        <button data-theme="light">Light</button>
+        <button data-theme="dark">Dark</button>
+      </div>
+      <div class="sidebar-foot-row">
+        <button id="sidebar-collapse" class="sidebar-collapse" title="Collapse sidebar">◧ Collapse</button>
+        <button id="app-quit" class="btn ghost sm" title="quit the app">Quit</button>
+      </div>
     </div>
   </aside>
 
@@ -49,29 +61,38 @@
     <!-- ============ CHAT ============ -->
     <section class="panel active" id="tab-chat">
       <div class="chat-toolbar">
+        <select id="chat-provider" class="select" style="width:160px"><option value="local">Local</option></select>
         <select id="chat-model" class="select"></select>
         <button id="chat-start-engine" class="btn">Start engine</button>
         <label class="field-inline">ctx <input id="chat-ctx" type="number" value="8192" min="512" step="512" class="num"></label>
         <label class="field-inline">temp <input id="chat-temp" type="number" value="0.7" min="0" max="2" step="0.05" class="num"></label>
-        <label class="field-inline" id="chat-moe-wrap" title="MoE models only — offload N expert blocks to system RAM to free VRAM. Increase if you hit OOM, decrease for more speed if VRAM allows." hidden>MoE CPU <input id="chat-moe" type="number" value="0" min="0" step="1" class="num"></label>
-        <label class="check" title="load weights without mmap — slower start, but works on filesystems without mmap and can lower memory spikes"><input id="chat-nommap" type="checkbox"> no-mmap</label>
-        <label class="check" title="lock weights in RAM — prevents swapping/OOM-kill of the process (uses more system RAM)"><input id="chat-mlock" type="checkbox"> mlock</label>
-        <label class="check" title="read weights with direct I/O — bypasses page cache (needs filesystem support; slower if weights are re-read often)"><input id="chat-dio" type="checkbox"> direct-io</label>
-        <label class="field-inline" title="KV cache quantization — q8_0/q4_0 cut cache VRAM at slight quality loss (applies to both K and V)">KV cache <select id="chat-kv" class="select kv"><option value="f16">f16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option></select></label>
-        <label class="check" title="model reasoning / chain-of-thought"><input id="chat-thinking" type="checkbox" checked> thinking</label>
+        <label class="field-inline" id="chat-moe-wrap" title="MoE models only — offload N expert blocks to system RAM to free VRAM." hidden>MoE CPU <input id="chat-moe" type="number" value="0" min="0" step="1" class="num"></label>
+        <label class="check" title="load weights without mmap"><input id="chat-nommap" type="checkbox"> no-mmap</label>
+        <label class="check" title="lock weights in RAM"><input id="chat-mlock" type="checkbox"> mlock</label>
+        <label class="check" title="direct I/O"><input id="chat-dio" type="checkbox"> direct-io</label>
+        <label class="field-inline" title="KV cache quantization — q4_0_turbo needs rebuilt llama.cpp">KV cache <select id="chat-kv" class="select kv"><option value="f16">f16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_0_turbo">q4_0_turbo</option><option value="q8_0_turbo">q8_0_turbo</option></select></label>
+        <label class="check" title="chain-of-thought"><input id="chat-thinking" type="checkbox" checked> thinking</label>
         <button id="chat-clear" class="btn ghost">Clear</button>
       </div>
+      <div class="sys-prompt-row">
+        <select id="sys-preset" class="select"><option value="">No system prompt</option><option value="You are a helpful assistant.">Helpful</option><option value="You are a senior code reviewer. Be concise, direct, and cite file:line.">Reviewer</option><option value="You are a creative writer. Use vivid language.">Creative</option><option value="custom">Custom…</option></select>
+        <textarea id="sys-prompt" rows="1" placeholder="System prompt (optional) — e.g. You are a senior engineer…"></textarea>
+      </div>
       <div id="chat-messages" class="messages"></div>
-      <div class="serverbar">
-        <label class="check"><input id="srv-enable" type="checkbox"> Expose OpenAI API to other apps/agents on LAN</label>
-        <label class="field-inline">API key (optional) <input id="srv-key" type="password" placeholder="empty = no auth" class="input"></label>
+      <div class="serverbar" id="harness-bar">
+        <span class="pill" id="harness-pill" title="harness at 9090/v1 (same port as vision)">harness: 9090/v1</span>
+        <label class="check" title="keep text model loaded when using Images/Video"><input id="harness-keep" type="checkbox" checked> Keep loaded</label>
+        <label class="check" title="expose 9090 to LAN (0.0.0.0) for opencode on other machines"><input id="srv-enable" type="checkbox"> Expose to LAN</label>
+        <label class="field-inline">API key <input id="srv-key" type="password" placeholder="empty = no auth" class="input"></label>
         <button id="srv-apply" class="btn">Apply</button>
+        <button id="harness-copy" class="btn ghost sm" title="Copy opencode.json snippet">Copy opencode</button>
+        <button id="harness-copy-curl" class="btn ghost sm" title="Copy curl">Copy curl</button>
         <span id="srv-url" class="muted"></span>
       </div>
       <div class="chat-inputbar">
         <div id="chat-thumbs" class="chat-thumbs" hidden></div>
         <div class="chat-inputrow">
-        <textarea id="chat-input" rows="2" placeholder="Message the model… (Enter to send, Shift+Enter for newline; paste/drop an image to attach)"></textarea>
+        <textarea id="chat-input" rows="2" placeholder="Message the model… (Enter to send, Shift+Enter for newline; paste/drop an image)"></textarea>
         <div class="chat-actions">
           <input id="chat-attach" type="file" accept="image/*" multiple hidden>
           <button id="chat-attach-btn" class="btn ghost" title="Attach image">Attach</button>
@@ -147,6 +168,7 @@
             <button id="img-save" class="btn ghost" hidden>Save PNG</button>
             <span id="img-meta" class="muted"></span>
           </div>
+          <div id="img-history" class="history-strip" hidden></div>
         </div>
       </div>
     </section>
@@ -304,6 +326,20 @@
           <div class="lib-row">
             <label class="field-inline">download to <select id="lib-dl-dir" class="select"></select></label>
           </div>
+          <div class="remotes">
+            <h3 style="font-size:12px; font-weight:700">Remote llama-servers (chat only)</h3>
+            <div id="remote-list" class="remote-list"></div>
+            <div class="remote-row">
+              <input id="remote-name" class="input" placeholder="Name (e.g. lab)">
+              <input id="remote-url" class="input" placeholder="http://192.168.1.10:8080">
+            </div>
+            <div class="remote-row">
+              <input id="remote-key" class="input" placeholder="API key (optional)" type="password">
+              <button id="remote-add" class="btn">Add</button>
+              <button id="remote-test" class="btn ghost">Test</button>
+            </div>
+            <span id="remote-status" class="muted"></span>
+          </div>
           <div id="lib-local" class="lib-list"></div>
         </div>
         <div class="lib-hf">
@@ -325,6 +361,14 @@
   <pre id="engine-log"></pre>
 </footer>
 
+<div id="palette-overlay" class="palette-overlay" hidden>
+  <div class="palette">
+    <input id="palette-input" placeholder="Type a command or search…" autocomplete="off">
+    <div id="palette-list" class="palette-list"></div>
+  </div>
+</div>
+
+<script src="vendor/katex.min.js"></script>
 <script src="vendor/marked.min.js"></script>
 <script src="app.js"></script>
 </body>

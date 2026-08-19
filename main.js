@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog } = require('electron');
 const http = require('http');
+const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -106,6 +107,107 @@ function createWindow() {
   });
 }
 
+// ---- remote helpers (chat-only) ----
+function getRemote(id) {
+  const list = config.get().remotes || [];
+  return list.find((r) => r.id === id) || null;
+}
+function remoteChatStream(remote, messages, opts, sendEvent) {
+  return new Promise((resolve, reject) => {
+    const body = { messages, stream: true, temperature: opts.temp ?? 0.7, max_tokens: opts.maxTokens ?? 2048, repeat_penalty: opts.repeatPenalty ?? 1.1, model: opts.remoteModel || remote.model || undefined };
+    if (opts.thinking !== undefined) body.chat_template_kwargs = { enable_thinking: !!opts.thinking };
+    const headers = { 'Content-Type': 'application/json' };
+    if (remote.apiKey) headers.Authorization = 'Bearer ' + remote.apiKey;
+    const u = new URL('/v1/chat/completions', remote.baseUrl);
+    const req = (u.protocol === 'https:' ? https : http).request(u, { method: 'POST', headers }, (res) => {
+      res.setEncoding('utf8');
+      let buf = '';
+      res.on('data', (c) => {
+        buf += c;
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, i).trim();
+          buf = buf.slice(i + 1);
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (payload === '[DONE]') { sendEvent({ done: true }); resolve(); return; }
+          try {
+            const j = JSON.parse(payload);
+            const delta = j.choices && j.choices[0] && j.choices[0].delta;
+            if (delta) {
+              if (delta.reasoning_content) sendEvent({ reasoning: delta.reasoning_content });
+              if (delta.content) sendEvent({ content: delta.content });
+            }
+          } catch (e) { /* partial chunk */ }
+        }
+      });
+      res.on('end', () => resolve());
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.write(JSON.stringify(body));
+    req.end();
+  });
+}
+
+// ---- single-port harness proxy (9090/v1/* → 127.0.0.1:8080) ----
+async function ensureHarnessModel() {
+  const h = config.get().harness || {};
+  const engine = engines.text;
+  if (engine.isRunning()) return;
+  let modelPath = h.model || '';
+  if (!modelPath) {
+    // pick first local text model
+    try { const list = models.list(config.get().modelDirs); const t = list.find(m=>m.type==='text'); if (t) modelPath = t.path; } catch(e){}
+  }
+  if (!modelPath) return;
+  try { await engine.start(modelPath, { ctx: engine.cfg.ctx || 8192 }); } catch(e){ broadcast({ type:'engine:log', typeName:'system', line:'harness auto-start failed: '+e.message }); }
+}
+function handleV1Proxy(req, res) {
+  const engine = engines.text;
+  // CORS for opencode and other harness clients
+  const origin = req.headers.origin || '*';
+  const cors = { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Expose-Headers': '*' };
+  if (req.method === 'OPTIONS') { res.writeHead(204, cors); res.end(); return; }
+  // handle /v1/models without needing engine running — return local list as fallback
+  if (req.url === '/v1/models' || req.url.startsWith('/v1/models?')) {
+    if (!engine.isRunning()) {
+      // try to return local model list as OpenAI format
+      try {
+        const list = models.list(config.get().modelDirs).filter(m=>m.type==='text');
+        const data = list.map(m=>({ id: m.name, object:'model', created: Math.floor(Date.now()/1000), owned_by:'polaris' }));
+        res.writeHead(200, { 'Content-Type':'application/json', ...cors });
+        res.end(JSON.stringify({ object:'list', data }));
+        return;
+      } catch(e){}
+    }
+  }
+  // ensure harness model is loaded for chat/completions (keepAlive)
+  const needsModel = req.url.startsWith('/v1/chat/completions') || req.url.startsWith('/v1/completions') || req.url.startsWith('/v1/embeddings');
+  const doProxy = () => {
+    const headers = { ...req.headers };
+    delete headers.host;
+    delete headers['content-length'];
+    // forward api key if harness has one? use engine cfg apiKey
+    if (engine.cfg.apiKey && !headers.authorization) headers.authorization = 'Bearer ' + engine.cfg.apiKey;
+    const opts = { method: req.method, headers, timeout: 0 };
+    const proxy = http.request(engine.baseUrl + req.url, opts, (r) => {
+      const h = { ...r.headers, ...cors };
+      res.writeHead(r.statusCode, h);
+      r.pipe(res);
+    });
+    proxy.on('error', (e) => {
+      if (!res.headersSent) { res.writeHead(502, { 'Content-Type':'application/json', ...cors }); res.end(JSON.stringify({ error: String(e) })); }
+    });
+    req.pipe(proxy);
+  };
+  if (needsModel && !engine.isRunning()) {
+    ensureHarnessModel().then(()=>{ if (engine.isRunning()) doProxy(); else { res.writeHead(503, { 'Content-Type':'application/json', ...cors }); res.end(JSON.stringify({ error:'no model loaded — select a model in PolarisStudio Chat and Start engine' })); } });
+  } else {
+    doProxy();
+  }
+}
+
 // ---- chat streaming (SSE to the HTTP client) ----
 function chatStream(engine, messages, opts, sendEvent) {
   return new Promise((resolve, reject) => {
@@ -169,7 +271,9 @@ const STATIC = {
   '/style.css': ['renderer/style.css', 'text/css'],
   '/app.js': ['renderer/app.js', 'application/javascript'],
   '/mic-worklet.js': ['renderer/mic-worklet.js', 'application/javascript'],
-  '/vendor/marked.min.js': ['renderer/vendor/marked.min.js', 'application/javascript']
+  '/vendor/marked.min.js': ['renderer/vendor/marked.min.js', 'application/javascript'],
+  '/vendor/katex.min.js': ['renderer/vendor/katex.min.js', 'application/javascript'],
+  '/vendor/katex.min.css': ['renderer/vendor/katex.min.css', 'text/css']
 };
 
 const server = http.createServer(async (req, res) => {
@@ -190,11 +294,20 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
       const { modelPath, messages, opts } = JSON.parse(body);
-      const engine = engines.text;
       const send = (ev) => res.write('data: ' + JSON.stringify(ev) + '\n\n');
       try {
-        if (!engine.isRunning()) await engine.start(modelPath, opts || {});
-        await chatStream(engine, messages, opts || {}, send);
+        // remote provider — chat-only, no local spawn
+        const provider = (opts && opts.provider) || config.get().engines.text.provider || 'local';
+        const remoteId = (opts && opts.remoteId) || config.get().engines.text.activeRemoteId || '';
+        if (provider === 'remote' && remoteId) {
+          const remote = getRemote(remoteId);
+          if (!remote) throw new Error('remote not found: ' + remoteId);
+          await remoteChatStream(remote, messages, opts || {}, send);
+        } else {
+          const engine = engines.text;
+          if (!engine.isRunning()) await engine.start(modelPath, opts || {});
+          await chatStream(engine, messages, opts || {}, send);
+        }
       } catch (err) {
         send({ error: String(err) });
       }
@@ -233,6 +346,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (p.startsWith('/v1/')) { handleV1Proxy(req, res); return; }
+
+  if (p.startsWith('/vendor/fonts/') && req.method === 'GET') {
+    const fp = path.join(__dirname, 'renderer', p.slice(1));
+    fs.readFile(fp, (err, data) => {
+      if (err) { res.writeHead(404); res.end('not found'); return; }
+      const ct = p.endsWith('.woff2') ? 'font/woff2' : p.endsWith('.woff') ? 'font/woff' : 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': ct, 'Cache-Control': 'public, max-age=86400' });
+      res.end(data);
+    });
+    return;
+  }
   const stat = STATIC[p];
   if (stat && req.method === 'GET') {
     fs.readFile(path.join(__dirname, stat[0]), (err, data) => {
@@ -261,18 +386,86 @@ async function api(p, data, url) {
       config.save();
       return { body: config.get() };
     }
-    case '/api/engines': return { body: Object.fromEntries(Object.entries(engines).map(([t, e]) => [t, e.status()])) };
+    case '/api/remotes': return { body: config.get().remotes || [] };
+    case '/api/remotes/add': {
+      const list = config.get().remotes || [];
+      const { name, baseUrl, apiKey } = data;
+      if (!name || !baseUrl) return { status: 400, body: { error: 'name and baseUrl required' } };
+      const u = baseUrl.replace(/\/$/, '');
+      let parsed; try { parsed = new URL(u); } catch (e) { return { status: 400, body: { error: 'invalid URL' } }; }
+      const id = 'r' + Date.now().toString(36);
+      list.push({ id, name: name.trim(), baseUrl: u, apiKey: (apiKey || '').trim() });
+      config.get().remotes = list;
+      config.save();
+      return { body: list };
+    }
+    case '/api/remotes/remove': {
+      config.get().remotes = (config.get().remotes || []).filter((r) => r.id !== data.id);
+      if (config.get().engines.text.activeRemoteId === data.id) config.get().engines.text.activeRemoteId = '';
+      config.save();
+      return { body: config.get().remotes };
+    }
+    case '/api/remotes/set-active': {
+      config.get().engines.text.activeRemoteId = data.id || '';
+      config.get().engines.text.provider = data.provider || (data.id ? 'remote' : 'local');
+      config.save();
+      return { body: config.get() };
+    }
+    case '/api/remotes/test': {
+      const r = getRemote(data.id) || { baseUrl: data.baseUrl, apiKey: data.apiKey || '' };
+      if (!r.baseUrl) return { status: 400, body: { error: 'no baseUrl' } };
+      const headers = {};
+      if (r.apiKey) headers.Authorization = 'Bearer ' + r.apiKey;
+      // try /v1/models then /health
+      const testUrl = (r.baseUrl.replace(/\/$/, '') + '/v1/models');
+      try {
+        const j = await new Promise((resolve, reject) => {
+          const u = new URL(testUrl);
+          const req = (u.protocol === 'https:' ? https : http).get(u, { headers, timeout: 8000 }, (res) => {
+            let d = ''; res.on('data', (c) => d += c); res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { resolve({ raw: d.slice(0, 200), status: res.statusCode }); } });
+          });
+          req.on('error', reject); req.on('timeout', () => req.destroy(new Error('timeout')));
+        });
+        const models = j.data || j.models || j;
+        return { body: { ok: true, models: Array.isArray(models) ? models.slice(0, 20) : j } };
+      } catch (e) { return { status: 500, body: { error: String(e) } }; }
+    }
+    case '/api/engines': {
+      const base = Object.fromEntries(Object.entries(engines).map(([t, e]) => [t, e.status()]));
+      // annotate text with remote info when provider is remote
+      const cfg = config.get();
+      if ((cfg.engines.text.provider || 'local') === 'remote' && cfg.engines.text.activeRemoteId) {
+        const r = getRemote(cfg.engines.text.activeRemoteId);
+        if (r) base.text = { ...base.text, provider: 'remote', remote: r.name, remoteUrl: r.baseUrl, running: true, model: r.name + ' (remote)' };
+      } else {
+        base.text.provider = 'local';
+      }
+      return { body: base };
+    }
     case '/api/quit': app.quit(); return { body: true };
     case '/api/engine/start': {
       const engine = engines[data.type];
       if (!engine) return { status: 400, body: { error: 'unknown engine ' + data.type } };
+      const harness = config.get().harness || {};
+      const keepAlive = harness.keepAlive !== false && harness.enabled !== false;
       for (const t of ['text', 'image', 'video']) {
         if (t !== data.type && engines[t].isRunning()) {
+          if (keepAlive && t === 'text' && (data.type === 'image' || data.type === 'video')) {
+            broadcast({ type: 'engine:log', typeName: 'system', line: `keepAlive: keeping text harness alive (not stopping ${t})` });
+            continue;
+          }
           await engines[t].stop();
           broadcast({ type: 'engine:log', typeName: 'system', line: `stopped ${t} engine to free VRAM` });
         }
       }
       if (engine.isRunning()) await engine.stop();
+      // remember harness model when starting text
+      if (data.type === 'text' && data.modelPath) {
+        const h = config.get().harness || {};
+        h.model = data.modelPath;
+        config.get().harness = h;
+        config.save();
+      }
       return { body: await engine.start(data.modelPath, data.opts || {}) };
     }
     case '/api/engine/stop': {
@@ -318,6 +511,16 @@ async function api(p, data, url) {
       if (dl) dl.abort();
       return { body: true };
     }
+    case '/api/harness/set': {
+      const h = config.get().harness || {};
+      if (data.keepAlive !== undefined) h.keepAlive = !!data.keepAlive;
+      if (data.model !== undefined) h.model = data.model || '';
+      if (data.enabled !== undefined) h.enabled = !!data.enabled;
+      config.get().harness = h;
+      config.save();
+      return { body: h };
+    }
+    case '/api/harness/get': return { body: config.get().harness || { enabled: true, keepAlive: true, model: '' } };
     case '/api/server/set': return { body: await setServer(data) };
     case '/api/images/generate': return { body: await engines.image.generate(data.prompt, data.opts || {}) };
     case '/api/images/img2img': return { body: await engines.image.generateImg2Img(data.prompt, data.opts || {}) };
@@ -346,30 +549,30 @@ async function api(p, data, url) {
 
 async function setServer({ enabled, apiKey, modelPath }) {
   const cfg = config.get();
+  cfg.server = { enabled: !!enabled, apiKey: enabled ? (apiKey||'') : '' };
+  // UI harness proxy is always at 9090/v1; this flag controls LAN (0.0.0.0) vs local (127.0.0.1)
+  // rebind UI server if host changed
+  const wantHost = enabled ? '0.0.0.0' : '127.0.0.1';
+  const curHost = server.listening ? server.address().address : null;
+  if (curHost && curHost !== wantHost) {
+    await new Promise(res=> server.close(res));
+    await new Promise(res=> server.listen(UI_PORT, wantHost, res));
+    console.log(`UI server rebound to ${wantHost}:${UI_PORT}`);
+  }
+  // keep llama-server on 127.0.0.1 always (single-port design); apiKey for harness proxy if needed
   const t = cfg.engines.text;
-  t.host = enabled ? '0.0.0.0' : '127.0.0.1';
   if (enabled && apiKey) t.apiKey = apiKey;
   else delete t.apiKey;
-  cfg.server = { enabled, apiKey: enabled ? apiKey : '' };
   config.save();
-  let error = null;
-  if (engines.text.isRunning()) {
-    if (!modelPath) {
-      error = 'engine running — stop it, then Apply to rebind';
-    } else {
-      await engines.text.stop();
-      try { await engines.text.start(modelPath, { ctx: t.ctx }); }
-      catch (err) { error = String(err); }
-    }
-  }
-  return { enabled, url: enabled ? `http://${lanIP()}:${t.port}/v1` : null, error };
+  // no need to restart text engine for single-port design
+  return { enabled: !!enabled, url: `http://${enabled ? lanIP() : '127.0.0.1'}:${UI_PORT}/v1`, localUrl: `http://127.0.0.1:${UI_PORT}/v1`, lanUrl: `http://${lanIP()}:${UI_PORT}/v1`, error: null };
 }
 
 app.whenReady().then(() => {
-  // relaunching the app while a server is already up just opens a window
   if (!app.requestSingleInstanceLock()) return app.quit();
   app.on('second-instance', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
-  server.listen(UI_PORT, '127.0.0.1', () => console.log(`PolarisStudio UI on http://127.0.0.1:${UI_PORT}`));
+  const host = (config.get().server && config.get().server.enabled) ? '0.0.0.0' : '127.0.0.1';
+  server.listen(UI_PORT, host, () => console.log(`PolarisStudio UI+harness on http://${host}:${UI_PORT} (harness: /v1, vision: /api/vision)`));
   createWindow();
   if (process.env.POLARIS_SHOT) {
     win.webContents.once('did-finish-load', () => {

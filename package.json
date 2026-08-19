@@ -14,6 +14,14 @@
     "linux": {
       "target": ["AppImage"],
       "category": "Utility"
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "renderer/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   },
   "author": "touhid",

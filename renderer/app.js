@@ -1,4 +1,4 @@
-/* global marked */
+/* global marked, katex */
 const $ = (sel) => document.querySelector(sel);
 
 window.__errs = [];
@@ -17,6 +17,34 @@ const el = (tag, cls, text) => {
   if (text !== undefined) n.textContent = text;
   return n;
 };
+// ponytail: Electron renderer clipboard can deny async writeText; fallback to execCommand
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    throw new Error('no secure clipboard');
+  } catch (e) {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      if (ok) return true;
+      throw new Error('execCommand failed');
+    } catch (e2) {
+      // last resort — let user copy manually, don't throw unhandled
+      try { window.prompt('Copy manually (Ctrl+C, Enter):', text); } catch(_){}
+      return false;
+    }
+  }
+}
 const fmt = (bytes) => {
   if (!bytes) return '—';
   const gb = bytes / 1e9;
@@ -45,24 +73,61 @@ let conversations = [];
 let activeConv = null;
 let chatStreaming = false;
 let abortChat = null;
-let pendingImages = []; // data-URLs attached to the chat input, awaiting send
+let pendingImages = [];
 let evSource = null;
+let remotes = [];
+let imageHistory = [];
+
+// ---------------- theme ----------------
+function applyTheme(theme) {
+  const t = theme || 'auto';
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  document.querySelectorAll('#theme-toggle button').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
+  // sync electron bg? no-op
+}
+function initTheme() {
+  const t = (config && config.ui && config.ui.theme) || 'auto';
+  applyTheme(t);
+  const mq = window.matchMedia('(prefers-color-scheme: dark)');
+  mq.addEventListener('change', () => { if ((config.ui && config.ui.theme || 'auto') === 'auto') applyTheme('auto'); });
+}
+function updateHarnessBar() {
+  const pill = $('#harness-pill');
+  if (!pill) return;
+  const enabled = !(config.harness && config.harness.enabled === false);
+  const keep = !(config.harness && config.harness.keepAlive === false);
+  const lan = !!(config.server && config.server.enabled);
+  pill.textContent = `harness: 9090/v1 ${enabled?'●':'○'} ${keep?'keep':'no-keep'} ${lan?'LAN':''}`.trim();
+  pill.classList.toggle('running', enabled);
+  const url = lan ? `http://${location.hostname}:9090/v1` : `http://127.0.0.1:9090/v1`;
+  $('#srv-url').textContent = url + (enabled?' (open)':' (harness on)');
+}
 
 // ---------------- init ----------------
 async function init() {
-  bindUI();            // buttons first — no data hiccup may kill them
+  bindUI();
   connectEvents();
   try { config = await api('/api/config'); } catch (e) { showErr('config: ' + e.message); return; }
+  initTheme();
   if (config.server) {
     $('#srv-enable').checked = !!config.server.enabled;
     if (config.server.apiKey) $('#srv-key').value = config.server.apiKey;
   }
+  if (config.harness) {
+    $('#harness-keep').checked = config.harness.keepAlive !== false;
+  }
+  updateHarnessBar();
   dirs = [...(config.modelDirs || [])];
   renderDirList();
   if (config.audio) {
     $('#audio-outdir').value = config.audio.outputDir || '';
     $('#trans-autocopy').checked = !!config.audio.copyTranscript;
   }
+  // sys prompt restore for active conv handled in renderChat
+  remotes = config.remotes || [];
+  renderRemotes();
+  renderProviderSelect();
   loadAudioVoices();
   try {
     for (const s of SAMPLERS) $('#img-sampler').append(new Option(s, s));
@@ -113,11 +178,55 @@ function bindUI() {
     if (activeConv) { activeConv.model = e.target.value; persistConv(); }
   });
   $('#chat-thinking').addEventListener('change', () => { if (activeConv) { activeConv.thinking = $('#chat-thinking').checked; persistConv(); } });
+  $('#chat-provider').addEventListener('change', async (e) => {
+    const v = e.target.value;
+    if (v === 'local') {
+      config.engines.text.provider = 'local';
+      config.engines.text.activeRemoteId = '';
+    } else {
+      config.engines.text.provider = 'remote';
+      config.engines.text.activeRemoteId = v;
+    }
+    await api('/api/remotes/set-active', { method: 'POST', body: { id: v === 'local' ? '' : v, provider: v === 'local' ? 'local' : 'remote' } });
+    config = await api('/api/config');
+    refreshEngineStatus();
+  });
   $('#app-quit').addEventListener('click', async () => { try { await api('/api/quit', { method: 'POST' }); } catch (e) { location.reload(); } });
   $('#chat-start-engine').addEventListener('click', async () => {
+    const prov = $('#chat-provider').value;
+    if (prov !== 'local') { appendLog('system', 'remote provider — no local engine to start'); return; }
     const m = modelById($('#chat-model').value);
     if (m) { await startEngine('text', m, { ctx: +$('#chat-ctx').value || 8192, nCpuMoe: +$('#chat-moe').value || 0, noMmap: $('#chat-nommap').checked, mlock: $('#chat-mlock').checked, directIo: $('#chat-dio').checked, cacheTypeK: $('#chat-kv').value }); refreshEngineStatus(); }
   });
+
+  // sys prompt
+  $('#sys-preset').addEventListener('change', (e) => {
+    const v = e.target.value;
+    if (v === 'custom') { $('#sys-prompt').focus(); return; }
+    if (v === '') $('#sys-prompt').value = '';
+    else $('#sys-prompt').value = v;
+    if (activeConv) { activeConv.systemPrompt = $('#sys-prompt').value.trim(); persistConv(); }
+  });
+  $('#sys-prompt').addEventListener('input', () => {
+    if (activeConv) { activeConv.systemPrompt = $('#sys-prompt').value.trim(); persistConv(); }
+    // sync preset select
+    const v = $('#sys-prompt').value.trim();
+    const opts = [...$('#sys-preset').options].map(o=>o.value);
+    if (!opts.includes(v)) $('#sys-preset').value = v ? 'custom' : '';
+  });
+
+  // theme + collapse
+  document.querySelectorAll('#theme-toggle button').forEach(b => b.addEventListener('click', async () => {
+    const t = b.dataset.theme;
+    applyTheme(t);
+    config.ui = config.ui || {}; config.ui.theme = t;
+    await api('/api/config/save', { method: 'POST', body: { ui: config.ui } });
+  }));
+  $('#sidebar-collapse').addEventListener('click', () => {
+    $('#sidebar').classList.toggle('collapsed');
+    $('#sidebar-collapse').textContent = $('#sidebar').classList.contains('collapsed') ? '◧ Expand' : '◧ Collapse';
+  });
+  $('#conv-search').addEventListener('input', (e) => renderConvList(e.target.value));
 
   $('#conv-new').addEventListener('click', newConversation);
 
@@ -162,6 +271,32 @@ function bindUI() {
   $('#lib-dl-dir').addEventListener('change', async (e) => {
     config = await api('/api/config/save', { method: 'POST', body: { downloadDir: e.target.value } });
   });
+  // remotes
+  $('#remote-add').addEventListener('click', async () => {
+    const name = $('#remote-name').value.trim();
+    const baseUrl = $('#remote-url').value.trim();
+    const apiKey = $('#remote-key').value.trim();
+    if (!name || !baseUrl) { $('#remote-status').textContent = 'name + URL required'; return; }
+    $('#remote-status').textContent = 'adding…';
+    try {
+      remotes = await api('/api/remotes/add', { method: 'POST', body: { name, baseUrl, apiKey } });
+      config.remotes = remotes;
+      $('#remote-name').value=''; $('#remote-url').value=''; $('#remote-key').value='';
+      $('#remote-status').textContent = 'added';
+      renderRemotes(); renderProviderSelect();
+    } catch (e) { $('#remote-status').textContent = 'error: '+e.message; }
+  });
+  $('#remote-test').addEventListener('click', async () => {
+    const baseUrl = $('#remote-url').value.trim();
+    const apiKey = $('#remote-key').value.trim();
+    if (!baseUrl) { $('#remote-status').textContent = 'enter URL to test'; return; }
+    $('#remote-status').textContent = 'testing…';
+    try {
+      const r = await api('/api/remotes/test', { method: 'POST', body: { baseUrl, apiKey } });
+      const n = r.models && r.models.length ? r.models.length : JSON.stringify(r).slice(0,120);
+      $('#remote-status').textContent = 'ok: '+(typeof n==='number'? n+' models' : n);
+    } catch (e) { $('#remote-status').textContent = 'fail: '+e.message; }
+  });
   $('#audio-start-engine').addEventListener('click', async () => {
     setPill('st-audio', 'starting…');
     try {
@@ -178,7 +313,7 @@ function bindUI() {
   $('#clone-file').addEventListener('change', () => { $('#clone-status').textContent = $('#clone-file').files[0] ? $('#clone-file').files[0].name + ' (' + fmt($('#clone-file').files[0].size) + ')' : ''; });
   $('#trans-go').addEventListener('click', transcribe);
   $('#trans-live').addEventListener('click', toggleLive);
-  $('#trans-copy').addEventListener('click', () => navigator.clipboard.writeText($('#trans-text').value));
+  $('#trans-copy').addEventListener('click', () => { copyText($('#trans-text').value).catch(()=>{}); });
   $('#trans-save').addEventListener('click', () => {
     const a = document.createElement('a');
     a.href = 'data:text/plain;charset=utf-8,' + encodeURIComponent($('#trans-text').value);
@@ -195,10 +330,47 @@ function bindUI() {
   });
 
   $('#srv-apply').addEventListener('click', applyServer);
+  $('#harness-keep').addEventListener('change', async (e)=>{
+    const keep = e.target.checked;
+    config.harness = { ...(config.harness||{}), keepAlive: keep, enabled: true };
+    await api('/api/harness/set', { method:'POST', body:{ keepAlive: keep, enabled: true } });
+    config = await api('/api/config');
+    updateHarnessBar();
+  });
+  $('#harness-copy').addEventListener('click', async ()=>{
+    const key = $('#srv-key').value.trim();
+    const model = $('#chat-model').value ? $('#chat-model').options[$('#chat-model').selectedIndex].text : 'local-model';
+    const host = (config.server && config.server.enabled) ? location.hostname : '127.0.0.1';
+    const snippet = JSON.stringify({ providers:{ polaris:{ baseUrl:`http://${host}:9090/v1`, apiKey: key || undefined, model } } }, null, 2);
+    const ok = await copyText(snippet);
+    $('#srv-url').textContent = ok ? 'copied opencode.json ✓' : 'copy failed — see prompt';
+    setTimeout(updateHarnessBar, 1500);
+  });
+  $('#harness-copy-curl').addEventListener('click', async ()=>{
+    const key = $('#srv-key').value.trim();
+    const host = (config.server && config.server.enabled) ? location.hostname : '127.0.0.1';
+    const auth = key ? ` -H "Authorization: Bearer ${key}"` : '';
+    const curl = `curl http://${host}:9090/v1/chat/completions${auth} -H "Content-Type: application/json" -d '{"model":"${$('#chat-model').value? $('#chat-model').options[$('#chat-model').selectedIndex].text : 'model'}","messages":[{"role":"user","content":"hi"}]}'`;
+    const ok = await copyText(curl);
+    $('#srv-url').textContent = ok ? 'copied curl ✓' : 'copy failed — see prompt';
+    setTimeout(updateHarnessBar, 1500);
+  });
   $('#log-toggle').addEventListener('click', () => {
     const bar = $('.logbar');
     bar.hidden = !bar.hidden;
     if (!bar.hidden) $('#engine-log').scrollTop = $('#engine-log').scrollHeight;
+  });
+
+  // palette
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); }
+    if (e.key === 'Escape' && !$('#palette-overlay').hidden) closePalette();
+  });
+  $('#palette-overlay').addEventListener('click', (e) => { if (e.target.id === 'palette-overlay') closePalette(); });
+  $('#palette-input').addEventListener('input', (e) => renderPalette(e.target.value));
+  $('#palette-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const a = $('#palette-list .palette-item.active'); if (a) { a.click(); } }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); navPalette(e.key === 'ArrowDown' ? 1 : -1); }
   });
 
   setInterval(refreshEngineStatus, 5000);
@@ -240,6 +412,45 @@ function switchSubTab(name) {
   }
 }
 
+// ---------------- remotes ----------------
+function renderRemotes() {
+  const box = $('#remote-list');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!remotes.length) { box.append(el('div','muted','no remotes — add one below')); return; }
+  for (const r of remotes) {
+    const row = el('div','remote-item' + (config.engines.text.activeRemoteId===r.id ? ' active' : ''));
+    row.append(el('span','r-name', r.name));
+    row.append(el('span','r-url', r.baseUrl));
+    const use = el('button','btn ghost sm', config.engines.text.activeRemoteId===r.id ? 'Active' : 'Use');
+    use.addEventListener('click', async () => {
+      await api('/api/remotes/set-active', { method:'POST', body:{ id: r.id, provider:'remote' } });
+      config = await api('/api/config');
+      renderRemotes(); renderProviderSelect(); refreshEngineStatus();
+    });
+    row.append(use);
+    const del = el('button','btn ghost sm','✕');
+    del.addEventListener('click', async () => {
+      if (!confirm('Remove '+r.name+'?')) return;
+      remotes = await api('/api/remotes/remove', { method:'POST', body:{ id: r.id } });
+      config.remotes = remotes;
+      renderRemotes(); renderProviderSelect(); refreshEngineStatus();
+    });
+    row.append(del);
+    box.append(row);
+  }
+}
+function renderProviderSelect() {
+  const s = $('#chat-provider');
+  const cur = s.value;
+  s.innerHTML = '<option value="local">Local</option>';
+  for (const r of remotes) s.append(new Option(r.name+' (remote)', r.id));
+  // restore
+  const want = config.engines.text.provider === 'remote' ? config.engines.text.activeRemoteId : 'local';
+  s.value = want || 'local';
+  if (cur && [...s.options].some(o=>o.value===cur)) s.value = cur;
+}
+
 // ---------------- conversations ----------------
 async function loadConversations() {
   conversations = await api('/api/conversations');
@@ -252,7 +463,7 @@ async function loadConversations() {
 }
 
 function newConversation(persist = true) {
-  activeConv = { id: 'c' + Date.now().toString(36), title: 'New chat', model: $('#chat-model').value || '', thinking: true, messages: [] };
+  activeConv = { id: 'c' + Date.now().toString(36), title: 'New chat', model: $('#chat-model').value || '', thinking: true, systemPrompt: '', messages: [] };
   if (persist) {
     conversations.unshift(activeConv);
     persistConv();
@@ -266,34 +477,68 @@ function persistConv() {
   api('/api/conversations/save', { method: 'POST', body: activeConv });
 }
 
-function renderConvList() {
+function exportConv(c, format) {
+  if (format === 'json') {
+    const a = document.createElement('a');
+    a.href = 'data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(c, null, 2));
+    a.download = (c.title.replace(/[^a-z0-9_-]/gi,'_')||'chat')+'.json';
+    a.click();
+  } else {
+    let md = '# '+c.title+'\n\n';
+    if (c.systemPrompt) md += '> System: '+c.systemPrompt+'\n\n';
+    for (const m of c.messages) {
+      const txt = typeof m.content==='string' ? m.content : (Array.isArray(m.content) ? m.content.filter(p=>p.type==='text').map(p=>p.text).join('\n') : '');
+      md += '## '+(m.role==='user'?'User':'Assistant')+'\n'+txt+'\n\n';
+    }
+    const a = document.createElement('a');
+    a.href = 'data:text/markdown;charset=utf-8,'+encodeURIComponent(md);
+    a.download = (c.title.replace(/[^a-z0-9_-]/gi,'_')||'chat')+'.md';
+    a.click();
+  }
+}
+
+function renderConvList(filter='') {
   const box = $('#conv-list');
+  const q = filter.toLowerCase().trim();
   box.innerHTML = '';
-  for (const c of conversations) {
+  const list = q ? conversations.filter(c=> c.title.toLowerCase().includes(q) || c.messages.some(m=> {
+    const t = typeof m.content==='string'? m.content : (Array.isArray(m.content)? m.content.filter(p=>p.type==='text').map(p=>p.text).join(' ') : '');
+    return t.toLowerCase().includes(q);
+  })) : conversations;
+  for (const c of list) {
     const row = el('div', 'conv-row' + (c.id === activeConv.id ? ' active' : ''), null);
     const label = el('span', 'conv-title', c.title);
     row.append(label);
+    const ex = el('button','conv-export','⤓');
+    ex.title='Export';
+    ex.addEventListener('click', (e)=>{ e.stopPropagation(); exportConv(c, 'md'); });
+    const exJ = el('button','conv-export','{}');
+    exJ.title='Export JSON';
+    exJ.addEventListener('click', (e)=>{ e.stopPropagation(); exportConv(c,'json'); });
+    row.append(exJ); row.append(ex);
     const del = el('button', 'conv-del', '×');
+    del.title='Delete';
     del.addEventListener('click', (e) => {
       e.stopPropagation();
       conversations = conversations.filter((x) => x.id !== c.id);
       api('/api/conversations/delete', { method: 'POST', body: { id: c.id } });
       if (activeConv.id === c.id) newConversation(false);
-      renderConvList();
+      renderConvList($('#conv-search').value);
     });
     row.append(del);
-    row.addEventListener('click', () => { activeConv = c; renderConvList(); renderChat(); });
+    row.addEventListener('click', () => { activeConv = c; renderConvList($('#conv-search').value); renderChat(); });
     label.addEventListener('dblclick', () => {
       const inp = document.createElement('input');
       inp.value = c.title;
       inp.className = 'conv-rename';
       label.replaceWith(inp);
       inp.focus();
-      inp.addEventListener('blur', () => { c.title = inp.value.trim() || c.title; persistConv(); renderConvList(); });
+      inp.addEventListener('blur', () => { c.title = inp.value.trim() || c.title; persistConv(); renderConvList($('#conv-search').value); });
       inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') inp.blur(); });
     });
     box.append(row);
   }
+  if (!list.length && q) box.append(el('div','muted','no matches'));
 }
 
 function renderChat() {
@@ -301,6 +546,8 @@ function renderChat() {
   $('#chat-model').value = activeConv.model;
   $('#chat-moe-wrap').hidden = !(modelById(activeConv.model) || {}).moe;
   $('#chat-thinking').checked = !!activeConv.thinking;
+  $('#sys-prompt').value = activeConv.systemPrompt || '';
+  $('#sys-preset').value = (()=>{ const v=(activeConv.systemPrompt||'').trim(); const opts=[...$('#sys-preset').options].map(o=>o.value); return opts.includes(v)? v : (v?'custom':''); })();
   for (const m of activeConv.messages) renderMsg(m.role, m.content);
   scrollChat();
 }
@@ -387,20 +634,48 @@ function renderLocalList() {
   const box = $('#lib-local');
   box.innerHTML = '';
   if (!localModels.length) { box.append(el('div', 'muted', 'no models found in ' + config.modelDirs.join(', '))); return; }
-  for (const m of localModels) {
-    const row = el('div', 'model-row');
-    row.append(el('span', 'mtype t-' + m.type, m.type));
-    row.append(el('span', 'mname', m.name));
-    row.append(el('span', 'msize', fmt(m.size)));
-    const del = el('button', 'btn ghost', 'Delete');
-    del.addEventListener('click', async () => {
-      if (!confirm('Delete ' + m.name + '?')) return;
-      await api('/api/models/delete', { method: 'POST', body: { path: m.path } });
-      refreshLocal();
-    });
-    row.append(del);
-    box.append(row);
-  }
+  // need engine status for active highlight
+  api('/api/engines').then(st=>{
+    const active = (st.text && st.text.model) || '';
+    for (const m of localModels) {
+      const row = el('div', 'model-row' + (m.name===active ? ' active-model' : ''));
+      row.append(el('span', 'mtype t-' + m.type, m.type));
+      row.append(el('span', 'mname', m.name));
+      row.append(el('span', 'msize', fmt(m.size)));
+      // VRAM badge
+      if (m.type==='text' && m.size) {
+        const need = (m.size/1e9)*1.05+1.5;
+        const badge = el('span', 'mbadge '+(need<7.5?'ok':'warn'), need<7.5?'fits 8GB':'too big');
+        badge.title = '~'+need.toFixed(1)+' GB VRAM';
+        row.append(badge);
+      }
+      if (m.name===active) row.append(el('span','mbadge','● loaded'));
+      if (m.moe) row.append(el('span','mbadge remote','MoE'));
+      const del = el('button', 'btn ghost', 'Delete');
+      del.addEventListener('click', async () => {
+        if (!confirm('Delete ' + m.name + '?')) return;
+        await api('/api/models/delete', { method: 'POST', body: { path: m.path } });
+        refreshLocal();
+      });
+      row.append(del);
+      box.append(row);
+    }
+  }).catch(()=>{
+    for (const m of localModels) {
+      const row = el('div', 'model-row');
+      row.append(el('span', 'mtype t-' + m.type, m.type));
+      row.append(el('span', 'mname', m.name));
+      row.append(el('span', 'msize', fmt(m.size)));
+      const del = el('button', 'btn ghost', 'Delete');
+      del.addEventListener('click', async () => {
+        if (!confirm('Delete ' + m.name + '?')) return;
+        await api('/api/models/delete', { method: 'POST', body: { path: m.path } });
+        refreshLocal();
+      });
+      row.append(del);
+      box.append(row);
+    }
+  });
 }
 
 async function startEngine(type, model, opts) {
@@ -426,7 +701,6 @@ function setPill(id, text, running) {
 }
 
 async function ejectEngine(type) {
-  const pill = $('#st-' + type);
   setPill('st-' + type, 'ejecting…');
   try {
     await api('/api/engine/stop', { method: 'POST', body: { type } });
@@ -445,6 +719,68 @@ async function refreshEngineStatus() {
   for (const [type, s] of Object.entries(st)) {
     setPill('st-' + type, s.running ? (type === 'audio' ? ttsPillLabel() : (s.model || 'running') + ' ✓') : 'idle', s.running);
   }
+  if (config && config.engines) {
+    const want = (config.engines.text.provider||'local')==='remote' ? config.engines.text.activeRemoteId : 'local';
+    if ($('#chat-provider').value !== want) $('#chat-provider').value = want || 'local';
+  }
+  try { updateHarnessBar(); } catch(e){}
+}
+
+// ---------------- palette ----------------
+const PALETTE_ITEMS = [
+  { label:'Chat', action:()=>switchTab('chat'), kbd:'1' },
+  { label:'Images — txt2img', action:()=>{switchTab('images'); switchSubTab('txt2img');}, kbd:'2' },
+  { label:'Images — img2img', action:()=>{switchTab('images'); switchSubTab('img2img');}, kbd:'' },
+  { label:'Video', action:()=>switchTab('video'), kbd:'3' },
+  { label:'Audio — TTS', action:()=>{switchTab('audio'); switchSubTab('tts');}, kbd:'4' },
+  { label:'Audio — Clone', action:()=>{switchTab('audio'); switchSubTab('clone');}, kbd:'' },
+  { label:'Library', action:()=>switchTab('library'), kbd:'5' },
+  { label:'New chat', action:()=>newConversation(), kbd:'N' },
+  { label:'Toggle theme Auto/Light/Dark', action:()=>{
+      const cur = config.ui && config.ui.theme || 'auto';
+      const next = cur==='auto' ? 'light' : cur==='light' ? 'dark' : 'auto';
+      applyTheme(next); config.ui= {...(config.ui||{}), theme: next}; api('/api/config/save',{method:'POST', body:{ui: config.ui}});
+    }, kbd:'T' },
+  { label:'Clear chat', action:()=>{ if(activeConv){ activeConv.messages=[]; persistConv(); renderChat(); }}, kbd:'' },
+  { label:'Toggle engine log', action:()=>$('#log-toggle').click(), kbd:'L' },
+];
+function openPalette() {
+  $('#palette-overlay').hidden = false;
+  $('#palette-input').value='';
+  $('#palette-input').focus();
+  renderPalette('');
+}
+function closePalette(){ $('#palette-overlay').hidden = true; }
+function navPalette(dir){
+  const items = [...$('#palette-list').children];
+  const cur = items.findIndex(x=>x.classList.contains('active'));
+  let nxt = cur + dir;
+  if (nxt<0) nxt = items.length-1;
+  if (nxt>=items.length) nxt=0;
+  items.forEach((x,i)=>x.classList.toggle('active', i===nxt));
+}
+function renderPalette(q){
+  const box = $('#palette-list');
+  box.innerHTML='';
+  const qq = q.toLowerCase().trim();
+  // include models as palette items via filter
+  let items = [...PALETTE_ITEMS];
+  if (localModels.length) {
+    for (const m of localModels.slice(0,8)) items.push({ label:'Load model: '+m.name, action:()=>{
+      $('#chat-model').value=m.path; $('#chat-moe-wrap').hidden=!m.moe; if(activeConv){activeConv.model=m.path; persistConv();}
+      switchTab('chat');
+    }, kbd:'' });
+  }
+  const filtered = qq ? items.filter(x=> x.label.toLowerCase().includes(qq)) : items;
+  for (const it of filtered.slice(0,12)) {
+    const row = el('div','palette-item');
+    row.append(el('span',null,it.label));
+    if (it.kbd) row.append(el('span','pi-kbd', it.kbd));
+    row.addEventListener('click', ()=>{ closePalette(); it.action(); });
+    box.append(row);
+  }
+  if (box.firstChild) box.firstChild.classList.add('active');
+  if (!filtered.length) box.append(el('div','muted','no match'));
 }
 
 // ---------------- chat ----------------
@@ -499,7 +835,6 @@ function contentParts(text) {
   return parts;
 }
 
-// message content may be a plain string or a parts array (text + images)
 function contentText(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) return content.filter((p) => p.type === 'text').map((p) => p.text).join('\n');
@@ -510,8 +845,11 @@ async function sendChat() {
   const input = $('#chat-input');
   const text = input.value.trim();
   if ((!text && !pendingImages.length) || chatStreaming) return;
-  const modelPath = $('#chat-model').value;
-  if (!modelPath) { appendLog('system', 'no model selected'); return; }
+  const provider = $('#chat-provider').value;
+  const isRemote = provider !== 'local';
+  let modelPath = $('#chat-model').value;
+  if (!isRemote && !modelPath) { appendLog('system', 'no model selected'); return; }
+  if (isRemote) modelPath = modelPath || 'remote'; // not used but required by API
 
   const userContent = contentParts(text);
   input.value = '';
@@ -520,21 +858,32 @@ async function sendChat() {
   activeConv.messages.push({ role: 'user', content: userContent });
   if (activeConv.title === 'New chat') activeConv.title = (text || 'image').slice(0, 40);
   persistConv();
-  renderConvList();
+  renderConvList($('#conv-search').value);
   renderMsg('user', userContent);
 
   const ctx = Number($('#chat-ctx').value) || 8192;
   const temp = Number($('#chat-temp').value) || 0.7;
   const thinking = $('#chat-thinking').checked;
-  const messages = activeConv.messages.slice(-8);
+  const sys = ($('#sys-prompt').value || '').trim();
+  let messages = activeConv.messages.slice(-8).map(m=> ({ role: m.role, content: m.content }));
+  if (sys) messages = [{ role:'system', content: sys }, ...messages];
 
   chatStreaming = true;
   $('#chat-send').disabled = true;
   $('#chat-stop').disabled = false;
 
-  const thinkingEl = el('div', 'msg reasoning', '…');
+  // reasoning as collapsible details
+  const thinkingWrap = el('div', 'msg reasoning', null);
+  const det = document.createElement('details');
+  det.open = true;
+  const summ = document.createElement('summary');
+  summ.textContent = 'thinking…';
+  const body = el('div','reasoning-body','');
+  det.append(summ, body);
+  thinkingWrap.append(det);
+  thinkingWrap.hidden = true;
   const bubble = el('div', 'msg assistant md', '');
-  $('#chat-messages').append(thinkingEl);
+  $('#chat-messages').append(thinkingWrap);
   $('#chat-messages').append(bubble);
   scrollChat();
 
@@ -544,10 +893,13 @@ async function sendChat() {
   abortChat = () => ac.abort();
 
   try {
+    const opts = { ctx, temp, thinking, maxTokens: 2048, provider: isRemote ? 'remote':'local', remoteId: isRemote ? provider : '' };
+    // pass turbo kv etc for remote? not needed
+    if (!isRemote) { opts.cacheTypeK = $('#chat-kv').value; }
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ modelPath, messages, opts: { ctx, temp, thinking, maxTokens: 2048 } }),
+      body: JSON.stringify({ modelPath, messages, opts }),
       signal: ac.signal
     });
     const reader = res.body.getReader();
@@ -563,8 +915,8 @@ async function sendChat() {
         buf = buf.slice(i + 2);
         if (!evt.startsWith('data:')) continue;
         const ev = JSON.parse(evt.slice(5));
-        if (ev.content) { content += ev.content; bubble.innerHTML = md(content); }
-        if (ev.reasoning) { reasoning += ev.reasoning; thinkingEl.textContent = 'thinking: ' + reasoning; }
+        if (ev.content) { content += ev.content; bubble.innerHTML = md(content); addCopyButtons(bubble); }
+        if (ev.reasoning) { reasoning += ev.reasoning; thinkingWrap.hidden = false; body.textContent = reasoning; summ.textContent = 'thinking ('+reasoning.length+' chars)'; }
         if (ev.error) { bubble.innerHTML = ''; bubble.textContent = 'error: ' + ev.error; bubble.classList.add('error'); }
         scrollChat();
       }
@@ -576,6 +928,8 @@ async function sendChat() {
     abortChat = null;
     $('#chat-send').disabled = false;
     $('#chat-stop').disabled = true;
+    if (!reasoning) thinkingWrap.hidden = true;
+    else det.open = false;
     if (content) {
       activeConv.messages.push({ role: 'assistant', content });
       persistConv();
@@ -584,11 +938,26 @@ async function sendChat() {
   }
 }
 
+function addCopyButtons(container){
+  container.querySelectorAll('pre').forEach(pre=>{
+    if (pre.querySelector('.copy-btn')) return;
+    const btn = el('button','copy-btn','Copy');
+    btn.addEventListener('click', async ()=>{
+      const code = pre.querySelector('code') ? pre.querySelector('code').textContent : pre.textContent.replace('Copy','');
+      const ok = await copyText(code);
+      btn.textContent= ok ? 'Copied!' : 'Press Ctrl+C'; setTimeout(()=>btn.textContent='Copy',1200);
+    });
+    pre.style.position='relative';
+    pre.append(btn);
+  });
+}
+
 function renderMsg(role, content) {
   const m = el('div', 'msg ' + role);
   if (role === 'assistant') {
     m.classList.add('md');
     m.innerHTML = md(contentText(content));
+    addCopyButtons(m);
   } else if (Array.isArray(content)) {
     for (const p of content) {
       if (p.type === 'image_url') {
@@ -609,9 +978,55 @@ function renderMsg(role, content) {
 
 function scrollChat() { $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; }
 
-const md = (s) => marked.parse(String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+// katex-aware markdown
+function md(s) {
+  let t = String(s);
+  // escape  manually? marked does it; we just inject katex html then let marked parse
+  // protect code blocks temporarily
+  const codeBlocks = [];
+  t = t.replace(/```[\s\S]*?```/g, (m)=>{ codeBlocks.push(m); return '§CODE'+(codeBlocks.length-1)+'§'; });
+  // inline code `...` protect $\$ inside
+  const inlineCodes = [];
+  t = t.replace(/`[^`]*`/g, (m)=>{ inlineCodes.push(m); return '§INLINE'+(inlineCodes.length-1)+'§'; });
 
-// ---------------- server exposure ----------------
+  // display math $$...$$ and \[...\]
+  t = t.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr)=>{
+    try { return katex.renderToString(expr.trim(), { displayMode:true, throwOnError:false }); } catch(e){ return _; }
+  });
+  t = t.replace(/\\\[([\s\S]+?)\\\]/g, (_, expr)=>{
+    try { return katex.renderToString(expr.trim(), { displayMode:true, throwOnError:false }); } catch(e){ return _; }
+  });
+  // inline math $...$ and \(...\)
+  // avoid $$ already handled; require single $ not followed by another
+  t = t.replace(/(^|[^$\\])\$([^$\n]+?)\$(?=[^$])/g, (m, pre, expr)=>{
+    try { return pre + katex.renderToString(expr.trim(), { displayMode:false, throwOnError:false }); } catch(e){ return m; }
+  });
+  t = t.replace(/\\\((.+?)\\\)/g, (_, expr)=>{
+    try { return katex.renderToString(expr.trim(), { displayMode:false, throwOnError:false }); } catch(e){ return _; }
+  });
+
+  // restore inline/code
+  t = t.replace(/§INLINE(\d+)§/g, (_, i)=> inlineCodes[Number(i)]);
+  t = t.replace(/§CODE(\d+)§/g, (_, i)=> codeBlocks[Number(i)]);
+
+  // now let marked parse; avoid double-escaping by not pre-escaping &<> — marked handles it, but katex html should pass through
+  // simple: if string contains katex html, we must not escape it; so escape only outside katex spans
+  // ponytail: just let marked parse with raw html allowed, escape text via marked's own escaping
+  try {
+    // temporarily remove katex html
+    const katexBlocks=[];
+    t = t.replace(/<span class="katex[\s\S]*?<\/span>/g, (m)=>{ katexBlocks.push(m); return '§KATEX'+(katexBlocks.length-1)+'§'; });
+    // also display blocks contain <span class="katex-display">
+    let html = marked.parse(t);
+    html = html.replace(/§KATEX(\d+)§/g, (_, i)=> katexBlocks[Number(i)]);
+    html = html.replace(/§CODE(\d+)§/g, (_, i)=> codeBlocks[Number(i)]); // fallback
+    return html;
+  } catch(e){
+    return marked.parse(String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'));
+  }
+}
+
+// ---------------- server exposure / harness ----------------
 async function applyServer() {
   const enabled = $('#srv-enable').checked;
   const apiKey = $('#srv-key').value.trim();
@@ -620,7 +1035,9 @@ async function applyServer() {
   btn.textContent = 'restarting…';
   try {
     const r = await api('/api/server/set', { method: 'POST', body: { enabled, apiKey, modelPath: $('#chat-model').value } });
-    $('#srv-url').textContent = r.error ? 'ERROR: ' + r.error : (r.url ? 'base URL: ' + r.url : '');
+    config = await api('/api/config');
+    updateHarnessBar();
+    $('#srv-url').textContent = r.error ? 'ERROR: ' + r.error : (r.url ? 'base URL: ' + r.url : (r.localUrl||''));
     if (r.error) appendLog('system', 'server: ' + r.error);
     refreshEngineStatus();
   } catch (e) {
@@ -670,12 +1087,36 @@ async function generateImage() {
     }
     $('#img-save').hidden = false;
     window.__lastMedia = { data: r.images[0], ext: 'png' };
+    pushHistory(r.images[0], 'png');
     const info = JSON.parse(r.info || '{}');
     $('#img-meta').textContent = [opts.samplerName, opts.scheduler, info.seed !== undefined ? 'seed ' + info.seed : '', ((Date.now() - t0) / 1000).toFixed(1) + 's'].join(' · ');
     $('#img-status').textContent = 'done';
   } catch (e) {
     $('#img-status').textContent = 'ERROR: ' + e.message;
   }
+}
+function pushHistory(b64, ext){
+  const strip = $('#img-history');
+  if(!strip) return;
+  imageHistory.unshift({ b64, ext });
+  if (imageHistory.length>8) imageHistory.pop();
+  strip.hidden = false;
+  strip.innerHTML='';
+  imageHistory.forEach((h,i)=>{
+    const im = document.createElement('img');
+    im.src = 'data:image/png;base64,'+h.b64;
+    if (i===0) im.classList.add('active');
+    im.addEventListener('click', ()=>{
+      $('#img-result').innerHTML='';
+      const big = document.createElement('img');
+      big.src = 'data:image/png;base64,'+h.b64;
+      $('#img-result').append(big);
+      window.__lastMedia = { data: h.b64, ext: h.ext };
+      strip.querySelectorAll('img').forEach(x=>x.classList.remove('active'));
+      im.classList.add('active');
+    });
+    strip.append(im);
+  });
 }
 
 // ---------------- video ----------------
@@ -845,7 +1286,7 @@ async function transcribe() {
     if (r.error) throw new Error(r.error);
     $('#trans-text').value = r.text;
     st.textContent = r.text ? 'done' : 'no speech detected';
-    if ($('#trans-autocopy').checked && r.text) navigator.clipboard.writeText(r.text);
+    if ($('#trans-autocopy').checked && r.text) copyText(r.text).catch(()=>{});
   } catch (e) { st.textContent = 'error: ' + e.message; }
 }
 
@@ -856,9 +1297,6 @@ let liveWorklet = null;
 let liveStream = null;
 let liveBusy = false;
 let liveChunks = 0;
-
-// capture mic as raw PCM in an AudioWorklet, hand whisper a real WAV every 3s —
-// MediaRecorder webm chunks were not reliably standalone-parseable (ponytail: no ffmpeg in this path at all)
 
 function pcmToWav(f32, rate) {
   const n = f32.length;
@@ -906,7 +1344,7 @@ async function toggleLive() {
     liveWorklet = new AudioWorkletNode(liveCtx, 'polaris-mic');
     liveSrc.connect(liveWorklet);
     liveWorklet.port.onmessage = async (e) => {
-      if (liveBusy) return; // whisper still on the last chunk — drop this one
+      if (liveBusy) return;
       liveBusy = true;
       liveChunks++;
       try {
@@ -921,7 +1359,7 @@ async function toggleLive() {
         const t = (r.text || '').trim();
         if (t) {
           $('#trans-text').value += ($('#trans-text').value ? ' ' : '') + t;
-          if ($('#trans-autocopy').checked) navigator.clipboard.writeText(t);
+          if ($('#trans-autocopy').checked) copyText(t).catch(()=>{});
         }
         st.textContent = 'listening… (' + liveChunks + ' chunks)';
       } catch (err) { st.textContent = 'error: ' + err.message; }
@@ -970,7 +1408,7 @@ async function hfFiles(repoId, row) {
   if (prev && prev.classList.contains('lib-list')) prev.remove();
   const filesBox = el('div', 'lib-list', null);
   filesBox.style.maxHeight = '200px';
-  filesBox.style.flex = '0 0 auto'; // flex parent crushes shrinkable items to 0 height when oversubscribed — box must keep its height and let the parent scroll
+  filesBox.style.flex = '0 0 auto';
   row.after(filesBox);
   let list;
   try { list = await api('/api/hf/files?repo=' + encodeURIComponent(repoId), { signal: AbortSignal.timeout(20000) }); }
@@ -1038,6 +1476,13 @@ async function startDownload(repoId, file, btn) {
   bar.append(el('div'));
   row.append(bar);
   row.append(el('span', 'dl-pct', '0%'));
+  const canc = el('button','dl-cancel','Cancel');
+  canc.addEventListener('click', async ()=>{
+    canc.disabled=true; canc.textContent='…';
+    try { await api('/api/hf/abort', { method:'POST', body:{ id } }); } catch(e){}
+    row.querySelector('.dl-pct').textContent='cancelled';
+  });
+  row.append(canc);
   $('#lib-downloads').append(row);
 }
 
@@ -1047,6 +1492,7 @@ function dlProgress({ id, bytes, total }) {
   const pct = total ? Math.min(100, (bytes / total) * 100) : 0;
   row.querySelector('.bar > div').style.width = pct + '%';
   row.querySelector('.dl-pct').textContent = fmt(bytes) + ' / ' + fmt(total) + ' (' + pct.toFixed(0) + '%)';
+  if (pct >= 100) { const c=row.querySelector('.dl-cancel'); if(c) c.textContent='Done'; }
 }
 
 function dlError({ id, error }) {

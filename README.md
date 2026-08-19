@@ -2,40 +2,44 @@
 
 A local AI studio in the spirit of LM Studio, built on Electron + plain Node.js, driving **llama.cpp** (text), **stable-diffusion.cpp** (image/video), and **Kokoro-82M / XTTS-v2 / Qwen3-TTS + whisper.cpp** (audio speech) over local HTTP. Designed around an AMD RX 580 (Polaris) with 8 GB VRAM, but works with any Vulkan device — or CPU.
 
-No CUDA, no cloud. The app is a thin orchestration layer: it spawns engine binaries, proxies their HTTP APIs, and gives you a clean UI for chat, image, video, TTS/STT, model library, and HuggingFace downloads.
+No cloud. The app is a thin orchestration layer: it spawns engine binaries, proxies their HTTP APIs, and gives you a clean UI for chat, image, video, TTS/STT, model library, and HuggingFace downloads.
 
 ## Where this fits
 
 The "everything local in one app" space is crowded (LM Studio, Locally Uncensored, LocalGPT, OneAI, LocalAI). PolarisStudio's slot is narrower: **low-VRAM AMD Vulkan, one AppImage, no substrate.**
 
 - **Runs on GPUs everyone else refuses** — the stack (llama.cpp + stable-diffusion.cpp on Vulkan, LCM 4-step, ESRGAN, AnimateDiff) is tuned around an RX 580 / 8 GB-class Polaris GPU. Competitors list NVIDIA 8–12 GB as their floor; this app treats 8 GB Vulkan as home.
-- **Genuinely small** — a ~110 MB AppImage with zero Docker, zero ComfyUI graph editor as a hidden dependency. The only non-binary runtime is a small Python service for TTS/STT (a venv with Kokoro/XTTS/Qwen3 + whisper.cpp). Everything else in this niche ships a multi-hundred-MB-to-GB runtime.
+- **Genuinely small** — a ~114 MB AppImage with zero Docker, zero ComfyUI graph editor as a hidden dependency. The only non-binary runtime is a small Python service for TTS/STT (a venv with Kokoro/XTTS/Qwen3 + whisper.cpp). Everything else in this niche ships a multi-hundred-MB-to-GB runtime.
 - **Model procurement is first-class** — in-app HuggingFace search, per-file exact size + quant level + a "fits / too big for 8 GB" VRAM verdict before you download, then a resumable `.part` download straight into your library.
 - **Engine cockpit, one window** — per-modality (text/image/video/audio) engine status, spawn/kill, and a shared log without leaving the UI.
 
-Expect parity on the common stuff: OpenAI-compatible LAN API, uncensored-model search, chat/images/video generation. The reason to pick PolarisStudio is the hardware it runs on and how little you have to install to get there.
+Expect parity on the common stuff: OpenAI-compatible local harness, uncensored-model search, chat/images/video generation. The reason to pick PolarisStudio is the hardware it runs on and how little you have to install to get there.
 
-## Features
+## Features (build 8)
 
-- **Chat** — OpenAI-compatible streaming (SSE), markdown rendering, chain-of-thought ("thinking") toggle, ctx/temperature controls, `repeat_penalty` to tame repetitive models, persistent conversation history with rename/delete.
+- **Chat** — OpenAI-compatible streaming (SSE), **LaTeX via KaTeX** (`$…$` inline, `$$…$$` display), **system prompt presets** (Helpful/Reviewer/Creative/Custom), markdown rendering, chain-of-thought ("thinking") as a **collapsible** `<details>` with reasoning body, **copy button on every code block**, ctx/temperature/`repeat_penalty` controls, persistent conversation history with **search/filter**, **rename (dblclick)**/**export to .md/.json**/**delete** per chat.
 - **Vision** — paste, drop, or attach an image into chat; the model sees it via a multimodal projector. `--mmproj` is auto-discovered next to the model file, and a bundled MCP server (`mcp-server.js`) exposes `describe_image` to coding agents.
-- **Images** — txt2img and img2img, LCM 4-step sampling, seed/batch/cfg/clip-skip, optional 4× RealESRGAN upscale, save PNG.
+- **Images** — txt2img and img2img, LCM 4-step sampling, seed/batch/cfg/clip-skip, optional 4× RealESRGAN upscale, save PNG, **8-thumb history strip** (click to promote).
 - **Video** — AnimateDiff txt2vid (webm), with a VRAM guard that rejects jobs too large for 8 GB.
-- **Audio** — three TTS backends behind one tab: Kokoro-82M (built-in, 54 voices) + XTTS-v2 voice cloning, and **Qwen3-TTS** (qwentts.cpp on Vulkan) with model selection, 10 languages, **designer voices** (describe the voice in a prompt — `--instruct`, no reference needed) and local voice cloning from any audio clip (mp3/webm/m4a normalized to WAV automatically). Speech-to-text via whisper.cpp for uploaded files **and a live microphone** (3-second chunks stream into the transcript as you speak).
-- **Model library** — scans configured directories recursively, classifies models into text/image/video/aux by filename, delete from disk.
-- **Engine cockpit, one window** — per-modality (text/image/video/audio) engine status, spawn, and **eject** (⏏ unloads the model, freeing VRAM), plus a shared log without leaving the UI.
-- **HuggingFace** — search, browse repo files, resumable downloads (`.part` + range resume, follows the HF→CDN redirect chain), live progress via SSE.
-- **LAN OpenAI server** — optionally rebinds llama-server to `0.0.0.0` with an API key, so other apps/agents on your network can use the same model at `http://<lan-ip>:8080/v1`.
-- **Resilience** — renderer crash recreates the window automatically; closing the window keeps the server + engines + downloads alive (headless mode); stale port conflicts are detected and killed automatically; one engine runs at a time to stay inside VRAM.
+- **Audio** — three TTS backends behind one tab: Kokoro-82M (built-in, 54 voices) + XTTS-v2 voice cloning, and **Qwen3-TTS** (qwentts.cpp on Vulkan) with model selection, 10 languages, **designer voices** and local voice cloning from any audio clip (mp3/webm/m4a normalized to WAV automatically). Speech-to-text via whisper.cpp for uploaded files **and a live microphone** (3-second chunks stream into the transcript as you speak).
+- **Model library** — scans configured directories recursively, classifies models into text/image/video/aux by filename, **VRAM badge** (`fits 8GB` / `too big` + `~GB` tooltip), **active-model highlight** (`● loaded`), delete from disk.
+- **Engine cockpit, one window** — per-modality (text/image/video/audio) engine status, spawn, and **eject** (⏏ unloads the model, freeing VRAM), plus a shared log without leaving the UI. **Harness `Keep loaded`** keeps the text model alive when you switch to Images/Video.
+- **HuggingFace** — search, browse repo files, resumable downloads (`.part` + range resume, follows the HF→CDN redirect chain), live progress via SSE, **Cancel button per download** (aborts stream, keeps `.part` for resume).
+- **Local AI harness — single port `9090/v1`** — the same port as the vision MCP (`http://127.0.0.1:9090`). **Open by default** on `127.0.0.1:9090/v1` (same-machine opencode needs no config). Toggle **Expose to LAN** to rebind to `0.0.0.0:9090` for other machines (`http://<lan-ip>:9090/v1`). `GET /v1/models` returns local text GGUFs even before a model is loaded; `POST /v1/chat/completions` auto-starts the harness model if needed. **Copy opencode.json** and **Copy curl** buttons in the Chat harness bar. Works with any OpenAI client (opencode, curl, Python `openai`).
+- **Remote harness (chat-only)** — connect to other machines’ `llama-server` / vLLM / Ollama via `Library → Remote llama-servers` (name + `http://host:port` + key, **Test** via `/v1/models`), then pick `Provider: [Local | lab-machine]` in Chat. Streaming + reasoning proxied, no local VRAM needed. Great for using a bigger box’s GPU from the Polaris box.
+- **Prettier LM Studio-like UI** — centered 780px chat, pill tabs, `backdrop-blur` topbar, subtle shadows, JetBrains Mono for code, **auto light/dark** (`Auto` follows `prefers-color-scheme`, `Light`/`Dark` override, persisted in `config.json:ui.theme`), **collapsible sidebar** (◧), **Ctrl+K palette** (tabs, models, new chat, theme, etc.), conversation search, theme-aware scrollbars.
+- **TurboQuant** — KV cache now offers `q4_0_turbo` / `q8_0_turbo` in addition to `f16/q8_0/q4_0`. Needs a rebuilt `llama.cpp` (master post-`2024-12`) — otherwise the engine logs `unknown cache type` and falls back. Pass via UI or `extraArgs`.
+- **Resilience** — renderer crash recreates the window automatically; closing the window keeps the server + engines + downloads alive (headless mode); stale port conflicts are detected and killed automatically; harness `keepAlive` avoids cold-start for opencode; one engine runs at a time to stay inside VRAM (unless keepAlive).
 
 ## Requirements
 
 - Node.js ≥ 18, npm
 - Electron (installed as a dev dependency)
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) — `llama-server` build for text models
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) — `llama-server` build for text models (rebuild for TurboQuant)
 - [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) — `sd-server` build for image/video
 - Audio: a Python 3 venv with `kokoro`, `TTS` (XTTS-v2) and `soundfile`; `ffmpeg` on PATH; [whisper.cpp](https://github.com/ggml-org/whisper.cpp) `whisper-cli`; optionally [qwentts.cpp](https://github.com/ServeurpersoCom/qwentts.cpp) (Vulkan build) + a `qwen-talker` GGUF + `qwen-tokenizer-12hz` GGUF for Qwen3-TTS
 - A Vulkan GPU (tested on AMD RX 580); CPU-only works but is slow
+- KaTeX fonts/CSS are vendored (`renderer/vendor/katex.*`, `renderer/vendor/fonts/`) — no CDN needed
 
 ## Install & run
 
@@ -51,9 +55,43 @@ Edit `config.json` to point at your engine binaries and model directories, then:
 npm start          # or: ./node_modules/.bin/electron .
 ```
 
-The UI opens at `http://127.0.0.1:9090` in an Electron window (the same URL works in a plain browser — the window is just a shell).
+The UI opens at `http://127.0.0.1:9090` in an Electron window (the same URL works in a plain browser — the window is just a shell). The **harness** is on the same port: `http://127.0.0.1:9090/v1` (and `http://<lan-ip>:9090/v1` when `Expose to LAN` is checked). The legacy `8080` llama-server port is still internal (`127.0.0.1:8080`) and proxied.
 
 First launch: no models → click **Library** → **HuggingFace search** → search → **Files** → **↓** on a `.gguf`. Downloads land in your first configured model directory and become immediately loadable.
+
+## Using as a local harness (opencode, curl, any OpenAI client)
+
+The harness is **on by default** at `http://127.0.0.1:9090/v1` (no toggle needed for same-machine). For other machines on your LAN, check **Expose to LAN** in the Chat harness bar and `Apply`.
+
+**opencode.json** (same machine):
+```json
+{
+  "providers": {
+    "polaris": {
+      "baseUrl": "http://127.0.0.1:9090/v1",
+      "model": "your-model-name.gguf"
+    }
+  },
+  "mcp": {
+    "polaris-vision": {
+      "type": "local",
+      "command": ["node", "/path/to/PolarisStudio/mcp-server.js"],
+      "enabled": true
+    }
+  }
+}
+```
+Click **Copy opencode** in the harness bar to copy the snippet with your current model + key prefilled. **Copy curl** gives a ready `curl http://.../v1/chat/completions` line.
+
+Test quickly:
+```bash
+curl http://127.0.0.1:9090/v1/models | jq
+curl -X POST http://127.0.0.1:9090/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"any","messages":[{"role":"user","content":"hi"}]}'
+```
+
+Remote harness: `Library → Remote llama-servers → Add http://other-box:8080 → Test → Use`, then in Chat pick `Provider: lab-machine`.
 
 ## Configuration (`config.json`)
 
@@ -62,18 +100,23 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | Key | Meaning | Default |
 |-----|---------|---------|
 | `modelDirs` | Directories scanned recursively for `.gguf` / `.safetensors` / `.bin` (whisper) | `~/stable-diffusion.cpp/models` |
+| `harness.enabled` | Single-port harness on `9090/v1` is on | `true` |
+| `harness.keepAlive` | Keep text model loaded when switching to Image/Video (so opencode doesn’t cold-start) | `true` |
+| `harness.model` | Last harness model path (auto-set when you Start engine) | `""` |
 | `engines.text.binary` | Path to `llama-server` | `~/llama.cpp/build/bin/llama-server` |
-| `engines.text.port` | Port for the text engine | `8080` |
+| `engines.text.port` | Port for the text engine (internal, proxied) | `8080` |
 | `engines.text.ngl` | GPU layers (`-ngl`) | `99` |
 | `engines.text.ctx` | Context size | `8192` |
 | `engines.text.nCpuMoe` | MoE experts offloaded to CPU (`--n-cpu-moe`; UI slider, MoE models only) | `0` |
 | `engines.text.noMmap` | Load weights without mmap (`--no-mmap`) | `false` |
 | `engines.text.mlock` | Lock weights in RAM (`--mlock`) | `false` |
 | `engines.text.directIo` | Bypass page cache on weight reads (`--direct-io`) | `false` |
-| `engines.text.cacheTypeK` / `engines.text.cacheTypeV` | KV cache quantization (`--cache-type-k/v`; `f16`/`q8_0`/`q4_0`) | `f16` |
+| `engines.text.cacheTypeK` / `engines.text.cacheTypeV` | KV cache quantization (`--cache-type-k/v`; `f16`/`q8_0`/`q4_0`/`q4_0_turbo`/`q8_0_turbo`) | `f16` |
 | `engines.text.extraArgs` | Extra llama-server flags | `["--flash-attn","on","--jinja"]` |
-| `engines.text.host` | `127.0.0.1`, or `0.0.0.0` when LAN server enabled | `0.0.0.0` |
+| `engines.text.provider` / `engines.text.activeRemoteId` | Remote harness selection (`local` vs `remote` + id) | `local` |
 | `engines.text.mmproj` | Optional explicit vision projector; otherwise auto-discovered only when an `mmproj-*.gguf` **shares the model's family name** (quant suffixes ignored, e.g. `gemma-4-E4B-it-Q4_0.gguf` ↔ `mmproj-gemma-4-E4B-it-Q8_0.gguf`). Unrelated projectors are never attached. | auto |
+| `remotes` | List of remote llama-servers `{id,name,baseUrl,apiKey}` | `[]` |
+| `ui.theme` | `auto` (follows OS) / `light` / `dark` | `auto` |
 | `engines.image.binary` / `engines.video.binary` | Path to `sd-server` | `~/stable-diffusion.cpp/build/bin/sd-server` |
 | `engines.image.port` / `engines.video.port` | Image / video ports | `7800` / `7801` |
 | `engines.image.backend` / `engines.video.backend` | Vulkan backend string | `diffusion=vulkan0,clip=vulkan0,vae=vulkan0` |
@@ -85,13 +128,13 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `engines.audio.qwen3Binary` | Path to `qwen-tts` (Qwen3-TTS talker runner) | `''` (off) |
 | `engines.audio.q3Codec` | Path to `qwen-tokenizer-12hz*.gguf` | `''` (auto: next to the talker) |
 | `engines.audio.ggmlBackend` | GGML backend for qwen3 (`Vulkan0`, `CPU`…) | `Vulkan0` |
-| `server.enabled` / `server.apiKey` | LAN OpenAI-API exposure (managed via UI) | off |
+| `server.enabled` / `server.apiKey` | Expose `9090` to LAN (`0.0.0.0`) + optional Bearer auth for the harness | off |
 
 ## Known limitations
 
-- **Model downloads from HuggingFace are unreliable** — downloads can stall, fail silently, or never appear in the download list, especially from datacenter IPs (HF throttles/401s them). Retrying, or downloading manually via `curl -L -C -` into a configured model directory, is the workaround.
-- **No cancel button for in-flight downloads** — once a download is queued there is no way to abort it from the UI; it runs to completion (or stalls). Restarting the app is the only out.
+- **Model downloads from HuggingFace are unreliable** — downloads can stall, fail silently, or never appear in the download list, especially from datacenter IPs (HF throttles/401s them). Retrying, or downloading manually via `curl -L -C -` into a configured model directory, is the workaround. In-flight downloads now have a **Cancel** button (keeps `.part` for resume).
 - **Vision needs a multimodal model** — chat attachments only work when the loaded text model has an `mmproj` projector next to it (e.g. an official Gemma/SmolVLM GGUF + its `mmproj-*.gguf` in the same directory). Plain text-only GGUFs ignore attached images.
+- **TurboQuant needs a rebuilt llama.cpp** — `q4_0_turbo` / `q8_0_turbo` only works with a post-`2024-12` `llama-server` build; otherwise the log shows `unknown cache type` and you should use `q8_0`.
 
 ## Vision / agent API (`/api/vision`) + MCP server
 
@@ -142,26 +185,30 @@ The first request starts the text engine if it isn't running (model load takes a
 
 - **Log button unresponsive** — the engine-log panel appeared dead because the `footer.logbar` sat below the viewport: `.app` was fixed at `100vh` and `body { overflow: hidden }` clipped it. The app body is now a flex column and the panel slides into view on toggle (build 4+).
 - **All buttons dead after the vision update** — `sendChat` declared `const content` for the user message while the streaming accumulator below used `let content`, a redeclaration that killed the whole script (SyntaxError at parse time → zero event listeners attached). The user-message variable was renamed `userContent`.
+- **Copy buttons “Write permission denied”** — `navigator.clipboard.writeText` fails in Electron without a secure context. Now uses `copyText()` with `execCommand('copy')` fallback + `prompt()` last resort; no more `unhandled:` banner (build 8).
+- **Taskbar still on build 5** — `~/.local/bin/polarisstudio` was a stale AppImage; `dist` now contains build 8 and `cp dist/*.AppImage ~/.local/bin/polarisstudio` updates it.
 
 ## Troubleshooting
 
-- **MoE model too slow / out of VRAM** — raise **MoE CPU** (offloads expert blocks to system RAM), or switch **KV cache** to `q8_0`/`q4_0` to shrink cache VRAM. Toggles apply per session from the chat toolbar. (Deprecated `--no-mmap`/`--mlock`/`--direct-io` still work in llama-server; a one-line deprecation warning in the log is expected.)
+- **MoE model too slow / out of VRAM** — raise **MoE CPU** (offloads expert blocks to system RAM), or switch **KV cache** to `q8_0`/`q4_0`/`q4_0_turbo` to shrink cache VRAM. Toggles apply per session from the chat toolbar. (Deprecated `--no-mmap`/`--mlock`/`--direct-io` still work in llama-server; a one-line deprecation warning in the log is expected.)
 - **"couldn't bind / address already in use"** — a stale engine from a killed app holds the port. The app detects this, runs `fuser -k <port>/tcp`, and retries.
-- **Downloads stall or fail** — this machine's IP may be throttled by HuggingFace (datacenter IPs get 401 on the API; the app falls back to scraping the public HTML tree page). Downloads resume via `.part` files; the retry restarts from where it stopped.
+- **Downloads stall or fail** — this machine's IP may be throttled by HuggingFace (datacenter IPs get 401 on the API; the app falls back to scraping the public HTML tree page). Downloads resume via `.part` files; the retry restarts from where it stopped. Use **Cancel** to abort a stalled download.
 - **Model repeats itself / loops** — `repeat_penalty: 1.1` is sent by default on every chat request; raise `temperature` if a model is still degenerate.
 - **Renderer glitches on old GPUs** — if the window ever goes blank, the app recreates it automatically and the backend keeps running.
-- **Window closed** — the server keeps running headless (good for leaving the OpenAI API up). Relaunch the app to get the window back, or hit **Quit** in the sidebar to stop everything.
+- **Window closed** — the server keeps running headless (good for leaving the harness up). Relaunch the app to get the window back, or hit **Quit** in the sidebar to stop everything.
+- **Harness not reachable from another machine** — check **Expose to LAN** in the harness bar, `Apply`, then use `http://<lan-ip>:9090/v1` (not `8080`). The harness is always `9090/v1` (same port as vision), `8080` is internal only.
 
 ## Project layout
 
 ```
-main.js            Electron main: HTTP server, routing, engine lifecycle, SSE
-lib/config.js      config.json load + defaults
+main.js            Electron main: HTTP server, routing, engine lifecycle, SSE, harness proxy (9090/v1)
+lib/config.js      config.json load + defaults (harness, remotes, ui.theme, turbo cache types)
 lib/models.js      model scanning + type classification
 lib/engines.js     Engine class: spawn/health/stop, chat, vision, image, video APIs
 lib/hf.js          HuggingFace search, HTML scrape, resumable downloads
 audio_server.py    TTS/STT service: Kokoro + XTTS-v2 clone + Qwen3-TTS + whisper
-renderer/          The UI: index.html, app.js (vanilla JS), style.css
+renderer/          The UI: index.html, app.js (vanilla JS + KaTeX), style.css (auto light/dark)
+  vendor/          vendored KaTeX (katex.min.{js,css} + fonts/) + marked.min.js
 mcp-server.js      Vision MCP server for coding agents (describe_image)
 preload.js         Legacy bridge, not used by the current UI
 config.json        Machine-specific config (gitignored)
