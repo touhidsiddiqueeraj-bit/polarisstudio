@@ -77,6 +77,9 @@ let pendingImages = [];
 let evSource = null;
 let remotes = [];
 let imageHistory = [];
+const vramBuf = [];
+const tempBuf = [];
+let gpuPollTimer = null;
 
 // ---------------- theme ----------------
 function applyTheme(theme) {
@@ -91,6 +94,67 @@ function initTheme() {
   applyTheme(t);
   const mq = window.matchMedia('(prefers-color-scheme: dark)');
   mq.addEventListener('change', () => { if ((config.ui && config.ui.theme || 'auto') === 'auto') applyTheme('auto'); });
+}
+
+// ---------------- settings ----------------
+function applyFont() {
+  const fam = (config.ui && config.ui.fontFamily) || 'inter';
+  const size = (config.ui && config.ui.fontSize) || 14;
+  const fonts = { inter: "'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif", system: 'system-ui, -apple-system, "Segoe UI", sans-serif', mono: 'ui-monospace, "Cascadia Mono", "JetBrains Mono", monospace' };
+  document.documentElement.style.setProperty('--font-sans', fonts[fam] || fonts.inter);
+  document.documentElement.style.setProperty('--font-size', size + 'px');
+}
+function renderThinkingSelect() {
+  const s = $('#chat-thinking');
+  const adv = !!(config.ui && config.ui.advancedThinking);
+  const cur = s.value || 'on';
+  s.innerHTML = '<option value="off">Off</option><option value="on">On</option>'
+    + (adv ? '<option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="max">Max</option>' : '');
+  s.value = cur;
+  $('#chat-budget-wrap').hidden = !adv;
+}
+function refreshMoeHint(m) {
+  $('#chat-moe-wrap').hidden = !(m && m.moe);
+  const hint = $('#chat-moe-hint');
+  if (hint) hint.hidden = !(m && m.moe);
+}
+function saveEngineFlag(patch) {
+  config.engines.text = { ...(config.engines.text || {}), ...patch };
+  api('/api/config/save', { method: 'POST', body: { engines: { text: patch } } });
+}
+function drawGpuChart(canvas, buf, color, label) {
+  const c = canvas;
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
+  const n = buf.length;
+  for (let i = 0; i < n; i++) {
+    const x = (i / 59) * (w - 10); const y = h - 8 - (buf[i] / 100) * (h - 12);
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
+  ctx.fillStyle = color; ctx.font = '9px ui-monospace, monospace'; ctx.textBaseline = 'top';
+  ctx.fillText(label, 4, 3);
+}
+function gpuPoll() {
+  api('/api/sys/gpu').then((g) => {
+    if (!g) { $('#gpu-vram').hidden = $('#gpu-temp').hidden = true; return; }
+    $('#gpu-vram').hidden = $('#gpu-temp').hidden = false;
+    const vramPct = g.vramTotal ? Math.min(100, (g.vramUsed / g.vramTotal) * 100) : 0;
+    vramBuf.push(vramPct); if (vramBuf.length > 60) vramBuf.shift();
+    drawGpuChart($('#gpu-vram'), vramBuf, '#5b8cff', (g.vramUsed / 1073741824).toFixed(1) + ' / ' + (g.vramTotal / 1073741824).toFixed(1) + ' GiB');
+    if (g.tempC != null) {
+      tempBuf.push(g.tempC); if (tempBuf.length > 60) tempBuf.shift();
+      drawGpuChart($('#gpu-temp'), tempBuf, '#fbbf24', g.tempC.toFixed(0) + '°C');
+      $('#gpu-temp').hidden = false;
+    }
+  }).catch(() => { /* ignore transient */ });
+}
+function startGpuPoll() {
+  if (gpuPollTimer) return;
+  gpuPoll();
+  gpuPollTimer = setInterval(gpuPoll, 2000);
 }
 function updateHarnessBar() {
   const pill = $('#harness-pill');
@@ -110,6 +174,20 @@ async function init() {
   connectEvents();
   try { config = await api('/api/config'); } catch (e) { showErr('config: ' + e.message); return; }
   initTheme();
+  applyFont();
+  renderThinkingSelect();
+  $('#set-font-family').value = (config.ui && config.ui.fontFamily) || 'inter';
+  $('#set-font-size').value = (config.ui && config.ui.fontSize) || 14;
+  $('#set-font-size-val').textContent = $('#set-font-size').value + 'px';
+  $('#set-adv-thinking').checked = !!(config.ui && config.ui.advancedThinking);
+  if (config.engines && config.engines.text) {
+    $('#chat-moe').value = config.engines.text.nCpuMoe || 0;
+    $('#chat-nommap').checked = !!config.engines.text.noMmap;
+    $('#chat-mlock').checked = !!config.engines.text.mlock;
+    $('#chat-dio').checked = !!config.engines.text.directIo;
+    $('#chat-kv').value = config.engines.text.cacheTypeK || 'f16';
+  }
+  startGpuPoll();
   if (config.server) {
     $('#srv-enable').checked = !!config.server.enabled;
     if (config.server.apiKey) $('#srv-key').value = config.server.apiKey;
@@ -174,10 +252,34 @@ function bindUI() {
   $('#chat-clear').addEventListener('click', () => { if (activeConv) { activeConv.messages = []; persistConv(); renderChat(); } });
   $('#chat-model').addEventListener('change', (e) => {
     const m = modelById(e.target.value);
-    $('#chat-moe-wrap').hidden = !(m && m.moe);
+    refreshMoeHint(m);
     if (activeConv) { activeConv.model = e.target.value; persistConv(); }
   });
-  $('#chat-thinking').addEventListener('change', () => { if (activeConv) { activeConv.thinking = $('#chat-thinking').checked; persistConv(); } });
+  $('#chat-thinking').addEventListener('change', () => { if (activeConv) { activeConv.thinkingMode = $('#chat-thinking').value; persistConv(); } });
+  $('#chat-budget').addEventListener('input', () => { if (activeConv) { activeConv.thinkingBudget = +$('#chat-budget').value || 0; persistConv(); } });
+  $('#chat-moe').addEventListener('input', () => saveEngineFlag({ nCpuMoe: +$('#chat-moe').value || 0 }));
+  $('#chat-nommap').addEventListener('change', () => saveEngineFlag({ noMmap: $('#chat-nommap').checked }));
+  $('#chat-mlock').addEventListener('change', () => saveEngineFlag({ mlock: $('#chat-mlock').checked }));
+  $('#chat-dio').addEventListener('change', () => saveEngineFlag({ directIo: $('#chat-dio').checked }));
+  $('#chat-kv').addEventListener('change', () => saveEngineFlag({ cacheTypeK: $('#chat-kv').value }));
+  $('#set-font-family').addEventListener('change', async (e) => {
+    applyFont();
+    config.ui = { ...(config.ui || {}), fontFamily: e.target.value };
+    await api('/api/config/save', { method: 'POST', body: { ui: config.ui } });
+  });
+  $('#set-font-size').addEventListener('input', async (e) => {
+    const v = +e.target.value;
+    $('#set-font-size-val').textContent = v + 'px';
+    applyFont();
+    config.ui = { ...(config.ui || {}), fontSize: v };
+    await api('/api/config/save', { method: 'POST', body: { ui: config.ui } });
+  });
+  $('#set-adv-thinking').addEventListener('change', async (e) => {
+    config.ui = { ...(config.ui || {}), advancedThinking: e.target.checked };
+    await api('/api/config/save', { method: 'POST', body: { ui: config.ui } });
+    renderThinkingSelect();
+  });
+  document.querySelector('.moe-hint button[data-open-tab]')?.addEventListener('click', () => switchTab('settings'));
   $('#chat-provider').addEventListener('change', async (e) => {
     const v = e.target.value;
     if (v === 'local') {
@@ -463,7 +565,7 @@ async function loadConversations() {
 }
 
 function newConversation(persist = true) {
-  activeConv = { id: 'c' + Date.now().toString(36), title: 'New chat', model: $('#chat-model').value || '', thinking: true, systemPrompt: '', messages: [] };
+  activeConv = { id: 'c' + Date.now().toString(36), title: 'New chat', model: $('#chat-model').value || '', thinkingMode: 'on', thinkingBudget: 0, systemPrompt: '', messages: [] };
   if (persist) {
     conversations.unshift(activeConv);
     persistConv();
@@ -544,8 +646,10 @@ function renderConvList(filter='') {
 function renderChat() {
   $('#chat-messages').innerHTML = '';
   $('#chat-model').value = activeConv.model;
-  $('#chat-moe-wrap').hidden = !(modelById(activeConv.model) || {}).moe;
-  $('#chat-thinking').checked = !!activeConv.thinking;
+  refreshMoeHint(modelById(activeConv.model));
+  if (activeConv.thinkingMode) $('#chat-thinking').value = activeConv.thinkingMode;
+  else $('#chat-thinking').value = activeConv.thinking ? 'on' : 'off';
+  $('#chat-budget').value = activeConv.thinkingBudget || 0;
   $('#sys-prompt').value = activeConv.systemPrompt || '';
   $('#sys-preset').value = (()=>{ const v=(activeConv.systemPrompt||'').trim(); const opts=[...$('#sys-preset').options].map(o=>o.value); return opts.includes(v)? v : (v?'custom':''); })();
   for (const m of activeConv.messages) renderMsg(m.role, m.content);
@@ -560,7 +664,7 @@ async function refreshLocal() {
   const byType = { text: [], image: [], video: [], aux: [], audio: [] };
   for (const m of localModels) byType[m.type].push(m);
   fillSelect('#chat-model', byType.text, 'no text models in library');
-  $('#chat-moe-wrap').hidden = !(modelById($('#chat-model').value) || {}).moe;
+  refreshMoeHint(modelById($('#chat-model').value) || null);
   fillSelect('#img-model', byType.image, 'no image models — SD1.5 gguf expected');
   fillSelect('#vid-model', byType.video.length ? byType.video : byType.image, byType.video.length ? '' : 'using image models (AnimateDiff mode)');
   if ($('#audio-model')) fillSelect('#audio-model', byType.audio.filter((m) => /whisper|ggml-/.test(m.name)), 'no audio models — download a whisper gguf from HF');
@@ -767,7 +871,7 @@ function renderPalette(q){
   let items = [...PALETTE_ITEMS];
   if (localModels.length) {
     for (const m of localModels.slice(0,8)) items.push({ label:'Load model: '+m.name, action:()=>{
-      $('#chat-model').value=m.path; $('#chat-moe-wrap').hidden=!m.moe; if(activeConv){activeConv.model=m.path; persistConv();}
+      $('#chat-model').value=m.path; refreshMoeHint(m); if(activeConv){activeConv.model=m.path; persistConv();}
       switchTab('chat');
     }, kbd:'' });
   }
@@ -863,7 +967,9 @@ async function sendChat() {
 
   const ctx = Number($('#chat-ctx').value) || 8192;
   const temp = Number($('#chat-temp').value) || 0.7;
-  const thinking = $('#chat-thinking').checked;
+  const thinkingMode = $('#chat-thinking').value;
+  const thinkingBudget = +$('#chat-budget').value || 0;
+  activeConv.thinkingMode = thinkingMode; activeConv.thinkingBudget = thinkingBudget;
   const sys = ($('#sys-prompt').value || '').trim();
   let messages = activeConv.messages.slice(-8).map(m=> ({ role: m.role, content: m.content }));
   if (sys) messages = [{ role:'system', content: sys }, ...messages];
@@ -893,7 +999,7 @@ async function sendChat() {
   abortChat = () => ac.abort();
 
   try {
-    const opts = { ctx, temp, thinking, maxTokens: 2048, provider: isRemote ? 'remote':'local', remoteId: isRemote ? provider : '' };
+    const opts = { ctx, temp, thinkingMode, thinkingBudget, maxTokens: Number($('#chat-max').value) || 8192, provider: isRemote ? 'remote':'local', remoteId: isRemote ? provider : '' };
     // pass turbo kv etc for remote? not needed
     if (!isRemote) { opts.cacheTypeK = $('#chat-kv').value; }
     const res = await fetch('/api/chat', {

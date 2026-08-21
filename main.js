@@ -107,6 +107,18 @@ function createWindow() {
   });
 }
 
+// thinking emulation: Off→enable_thinking:false; On→true; low/medium/high/max→true + reasoning_effort; budget>0→thinking_budget
+function thinkingKwargs(opts) {
+  const mode = opts.thinkingMode ?? (opts.thinking === undefined ? undefined : (opts.thinking ? 'on' : 'off'));
+  const kw = {};
+  if (mode === 'off') kw.enable_thinking = false;
+  else if (mode === 'on') kw.enable_thinking = true;
+  else { const e = ['low', 'medium', 'high', 'max'].includes(mode); if (e) { kw.enable_thinking = true; kw.reasoning_effort = mode; } else kw.enable_thinking = true; }
+  const budget = Number(opts.thinkingBudget);
+  if (Number.isFinite(budget) && budget > 0) kw.thinking_budget = Math.round(budget);
+  return Object.keys(kw).length ? kw : null;
+}
+
 // ---- remote helpers (chat-only) ----
 function getRemote(id) {
   const list = config.get().remotes || [];
@@ -114,8 +126,10 @@ function getRemote(id) {
 }
 function remoteChatStream(remote, messages, opts, sendEvent) {
   return new Promise((resolve, reject) => {
-    const body = { messages, stream: true, temperature: opts.temp ?? 0.7, max_tokens: opts.maxTokens ?? 2048, repeat_penalty: opts.repeatPenalty ?? 1.1, model: opts.remoteModel || remote.model || undefined };
-    if (opts.thinking !== undefined) body.chat_template_kwargs = { enable_thinking: !!opts.thinking };
+    const body = { messages, stream: true, temperature: opts.temp ?? 0.7, max_tokens: opts.maxTokens ?? (config.get().engines.text.maxTokens || 8192), repeat_penalty: opts.repeatPenalty ?? 1.1, model: opts.remoteModel || remote.model || undefined };
+    const kw = thinkingKwargs(opts);
+    if (kw) body.chat_template_kwargs = kw;
+    if (kw && kw.reasoning_effort) body.reasoning_effort = kw.reasoning_effort;
     const headers = { 'Content-Type': 'application/json' };
     if (remote.apiKey) headers.Authorization = 'Bearer ' + remote.apiKey;
     const u = new URL('/v1/chat/completions', remote.baseUrl);
@@ -211,8 +225,9 @@ function handleV1Proxy(req, res) {
 // ---- chat streaming (SSE to the HTTP client) ----
 function chatStream(engine, messages, opts, sendEvent) {
   return new Promise((resolve, reject) => {
-    const body = { messages, stream: true, temperature: opts.temp ?? 0.7, max_tokens: opts.maxTokens ?? 2048, repeat_penalty: opts.repeatPenalty ?? 1.1 };
-    if (opts.thinking !== undefined) body.chat_template_kwargs = { enable_thinking: !!opts.thinking };
+    const body = { messages, stream: true, temperature: opts.temp ?? 0.7, max_tokens: opts.maxTokens ?? (config.get().engines.text.maxTokens || 8192), repeat_penalty: opts.repeatPenalty ?? 1.1 };
+    const kw = thinkingKwargs(opts);
+    if (kw) body.chat_template_kwargs = kw;
     const headers = { 'Content-Type': 'application/json' };
     if (engine.cfg.apiKey) headers.Authorization = 'Bearer ' + engine.cfg.apiKey;
     const req = http.request(engine.baseUrl + '/v1/chat/completions', { method: 'POST', headers }, (res) => {
@@ -372,6 +387,44 @@ const server = http.createServer(async (req, res) => {
   res.end('not found');
 });
 
+// deep-merge plain objects (arrays/leaves replaced) — config/save must not clobber sibling keys
+function mergeInto(base, patch) {
+  for (const k of Object.keys(patch || {})) {
+    const pv = patch[k];
+    if (pv && typeof pv === 'object' && !Array.isArray(pv) && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k])) {
+      mergeInto(base[k], pv);
+    } else {
+      base[k] = pv;
+    }
+  }
+}
+
+// RX 580 (amdgpu) exposes VRAM + temp in sysfs — poll cheap (≈1.8ms a read)
+const DRM_DIR = '/sys/class/drm';
+function readGpuState() {
+  try {
+    const modes = fs.readdirSync(DRM_DIR).filter((n) => /^card\d+$/.test(n));
+    for (const card of modes) {
+      const dev = path.join(DRM_DIR, card, 'device');
+      let total = NaN;
+      try { total = parseInt(fs.readFileSync(path.join(dev, 'mem_info_vram_total'), 'utf8')); } catch (e) {}
+      if (!Number.isFinite(total)) continue;
+      let used = 0;
+      try { used = parseInt(fs.readFileSync(path.join(dev, 'mem_info_vram_used'), 'utf8')); } catch (e) {}
+      let tempCPrev = null;
+      try {
+        const hwmons = fs.readdirSync(path.join(dev, 'hwmon'));
+        for (const h of hwmons) {
+          const t = parseInt(fs.readFileSync(path.join(dev, 'hwmon', h, 'temp1_input'), 'utf8'));
+          if (Number.isFinite(t)) { tempCPrev = t / 1000; break; }
+        }
+      } catch (e) {}
+      return { vramUsed: used, vramTotal: total, tempC: tempCPrev };
+    }
+  } catch (e) {}
+  return null;
+}
+
 async function api(p, data, url) {
   switch (p) {
     case '/api/config': return { body: config.get() };
@@ -382,10 +435,11 @@ async function api(p, data, url) {
       return { body: r.canceled || !r.filePaths.length ? { dir: null } : { dir: r.filePaths[0] } };
     }
     case '/api/config/save': {
-      Object.assign(config.get(), data);
+      mergeInto(config.get(), data);
       config.save();
       return { body: config.get() };
     }
+    case '/api/sys/gpu': return { body: readGpuState() };
     case '/api/remotes': return { body: config.get().remotes || [] };
     case '/api/remotes/add': {
       const list = config.get().remotes || [];

@@ -25,7 +25,7 @@
     <div class="sidebar-foot">
       <div class="sidebar-foot-row">
         <div class="pill pill-gpu">RX 580 · Vulkan</div>
-        <div class="pill" id="build-tag">build 8</div>
+        <div class="pill" id="build-tag">build 10</div>
       </div>
       <div class="theme-toggle" id="theme-toggle">
         <button data-theme="auto" class="active">Auto</button>
@@ -48,6 +48,7 @@
         <button class="tab" data-tab="video">Video</button>
         <button class="tab" data-tab="audio">Audio</button>
         <button class="tab" data-tab="library">Library</button>
+        <button class="tab" data-tab="settings">Settings</button>
       </nav>
       <div class="statusbar">
         <span class="pill" id="st-text">text: idle</span><button class="btn ghost sm eject" data-engine="text" title="eject model (frees VRAM)" hidden>⏏</button>
@@ -64,14 +65,14 @@
         <select id="chat-provider" class="select" style="width:160px"><option value="local">Local</option></select>
         <select id="chat-model" class="select"></select>
         <button id="chat-start-engine" class="btn">Start engine</button>
+        <canvas id="gpu-vram" width="200" height="36" hidden title="VRAM usage"></canvas>
+        <canvas id="gpu-temp" width="200" height="36" hidden title="GPU temp"></canvas>
         <label class="field-inline">ctx <input id="chat-ctx" type="number" value="8192" min="512" step="512" class="num"></label>
+        <label class="field-inline" title="max tokens per response — raise for long-thinking models">max <input id="chat-max" type="number" value="8192" min="256" step="512" class="num"></label>
         <label class="field-inline">temp <input id="chat-temp" type="number" value="0.7" min="0" max="2" step="0.05" class="num"></label>
-        <label class="field-inline" id="chat-moe-wrap" title="MoE models only — offload N expert blocks to system RAM to free VRAM." hidden>MoE CPU <input id="chat-moe" type="number" value="0" min="0" step="1" class="num"></label>
-        <label class="check" title="load weights without mmap"><input id="chat-nommap" type="checkbox"> no-mmap</label>
-        <label class="check" title="lock weights in RAM"><input id="chat-mlock" type="checkbox"> mlock</label>
-        <label class="check" title="direct I/O"><input id="chat-dio" type="checkbox"> direct-io</label>
-        <label class="field-inline" title="KV cache quantization — q4_0_turbo needs rebuilt llama.cpp">KV cache <select id="chat-kv" class="select kv"><option value="f16">f16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_0_turbo">q4_0_turbo</option><option value="q8_0_turbo">q8_0_turbo</option></select></label>
-        <label class="check" title="chain-of-thought"><input id="chat-thinking" type="checkbox" checked> thinking</label>
+        <label class="field-inline" title="thinking mode — On for CoT, advanced levels via Settings">think <select id="chat-thinking" class="select kv"><option value="off">Off</option><option value="on">On</option></select></label>
+        <label class="field-inline" id="chat-budget-wrap" title="thinking budget (Anthropic-style, tokens; 0 = no budget)" hidden>budget <input id="chat-budget" type="number" value="0" min="0" step="256" class="num"></label>
+        <div class="moe-hint" id="chat-moe-hint" hidden>MoE model — enable CPU offload in <button class="link" data-open-tab="settings">Settings</button></div>
         <button id="chat-clear" class="btn ghost">Clear</button>
       </div>
       <div class="sys-prompt-row">
@@ -352,6 +353,41 @@
         </div>
       </div>
       <div id="lib-downloads" class="downloads"></div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="panel" id="tab-settings">
+      <div class="settings-wrap">
+        <details class="section" open>
+          <summary>Appearance</summary>
+          <div class="grid2">
+            <label>Font family
+              <select id="set-font-family" class="select">
+                <option value="inter">Inter</option>
+                <option value="system">System</option>
+                <option value="mono">Monospace</option>
+              </select>
+            </label>
+            <label>Font size <span class="muted" id="set-font-size-val">14px</span>
+              <input id="set-font-size" type="range" min="12" max="18" step="1" value="14" style="width:100%">
+            </label>
+          </div>
+        </details>
+        <details class="section" open>
+          <summary>Text engine flags</summary>
+          <div class="grid2">
+            <label id="chat-moe-wrap" title="MoE models only — offload N expert blocks to system RAM to free VRAM.">MoE CPU offload <input id="chat-moe" type="number" value="0" min="0" step="1" class="num"></label>
+            <label class="check" title="load weights without mmap"><input id="chat-nommap" type="checkbox"> no-mmap</label>
+            <label class="check" title="lock weights in RAM"><input id="chat-mlock" type="checkbox"> mlock</label>
+            <label class="check" title="direct I/O"><input id="chat-dio" type="checkbox"> direct-io</label>
+          </div>
+          <label class="field-inline" title="KV cache quantization — q4_0/q8_0 compress the KV cache to fit more context in VRAM">KV cache <select id="chat-kv" class="select kv"><option value="f16">f16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="iq4_nl">iq4_nl</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select></label>
+        </details>
+        <details class="section" open>
+          <summary>Chat</summary>
+          <label class="check" title="show Low/Medium/High/Max + thinking budget in the chat toolbar"><input id="set-adv-thinking" type="checkbox"> Advanced thinking modes (Low / Medium / High / Max + budget)</label>
+        </details>
+      </div>
     </section>
   </main>
 </div>
