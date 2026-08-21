@@ -87,7 +87,7 @@ function applyTheme(theme) {
   if (t === 'auto') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', t);
   document.querySelectorAll('#theme-toggle button').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
-  // sync electron bg? no-op
+  document.querySelectorAll('#settings-theme-toggle button').forEach(b => b.classList.toggle('active', b.dataset.theme === t));
 }
 function initTheme() {
   const t = (config && config.ui && config.ui.theme) || 'auto';
@@ -114,13 +114,58 @@ function renderThinkingSelect() {
   $('#chat-budget-wrap').hidden = !adv;
 }
 function refreshMoeHint(m) {
-  $('#chat-moe-wrap').hidden = !(m && m.moe);
+  // ponytail: MoE row is always visible (toggle-like). Only the chat hint is conditional.
   const hint = $('#chat-moe-hint');
   if (hint) hint.hidden = !(m && m.moe);
+  const row = document.querySelector('.moe-row');
+  if (row) row.style.opacity = (m && m.moe) ? '1' : '0.95';
+}
+function syncMoeUI() {
+  const n = +(config.engines.text.nCpuMoe || 0);
+  const en = $('#chat-moe-enable');
+  const inp = $('#chat-moe');
+  if (en) en.checked = n > 0;
+  if (inp) { inp.value = n; inp.disabled = !!(en && !en.checked); }
+}
+function switchSettingsPane(name) {
+  document.querySelectorAll('.settings-tab').forEach(t=> t.classList.toggle('active', t.dataset.pane===name));
+  document.querySelectorAll('.settings-pane').forEach(p=> p.classList.toggle('active', p.dataset.pane===name));
 }
 function saveEngineFlag(patch) {
   config.engines.text = { ...(config.engines.text || {}), ...patch };
   api('/api/config/save', { method: 'POST', body: { engines: { text: patch } } });
+}
+function fillDraftSelect() {
+  const s = $('#set-draft-model');
+  if (!s) return;
+  const cur = s.value || (config.engines.text && config.engines.text.draftModel) || '';
+  const txt = (localModels || []).filter(m => m.type === 'text');
+  s.innerHTML = '<option value="">(none — no separate draft)</option>';
+  for (const m of txt) s.append(new Option(`${m.name} (${fmt(m.size)})`, m.path));
+  s.value = cur;
+}
+async function runBench() {
+  const out = $('#bench-out');
+  const model = $('#chat-model').value;
+  if (!model) { out.textContent = 'no model selected'; return; }
+  out.textContent = 'bench: starting — small + large prompt (needs engine running)...\n';
+  const tests = [
+    { name: 'small prefill (23 tok)', prompt: 'Explain quantum computing.' },
+    { name: 'large prefill (~500 tok)', prompt: ('You are a helpful assistant. '.repeat(30) + 'Summarize the history of computing in detail. ') }
+  ];
+  for (const t of tests) {
+    const start = performance.now();
+    try {
+      const res = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelPath: model, messages: [{ role: 'user', content: t.prompt }], opts: { maxTokens: 128, temp: 0.7, thinkingMode: 'off' } }) });
+      if (!res.ok) { out.textContent += t.name + ': HTTP ' + res.status + '\n'; continue; }
+      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf=''; let n=0;
+      const t0 = performance.now();
+      while (true) { const {done,value} = await reader.read(); if(done)break; buf+=dec.decode(value,{stream:true}); let i; while((i=buf.indexOf('\n\n'))>=0){ const evt=buf.slice(0,i); buf=buf.slice(i+2); if(!evt.startsWith('data:'))continue; try{ const ev=JSON.parse(evt.slice(5)); if(ev.content) n+= ev.content.length/4; }catch{} } }
+      const dt = (performance.now()-t0)/1000;
+      out.textContent += t.name + ': ~' + (n/dt).toFixed(1) + ' tok/s gen, total ' + dt.toFixed(2)+'s\n';
+    } catch(e){ out.textContent += t.name + ': error ' + e.message + '\n'; }
+  }
+  out.textContent += 'done. For full numbers see engine log (prompt eval / eval). Tweak batch/ubatch/threads then Restart engine.\n';
 }
 function drawGpuChart(canvas, buf, color, label) {
   const c = canvas;
@@ -180,27 +225,55 @@ async function init() {
   $('#set-font-size').value = (config.ui && config.ui.fontSize) || 14;
   $('#set-font-size-val').textContent = $('#set-font-size').value + 'px';
   $('#set-adv-thinking').checked = !!(config.ui && config.ui.advancedThinking);
+  // sync settings theme toggle
+  document.querySelectorAll('#settings-theme-toggle button').forEach(b=> b.classList.toggle('active', b.dataset.theme === ((config.ui && config.ui.theme) || 'auto')));
   if (config.engines && config.engines.text) {
-    $('#chat-moe').value = config.engines.text.nCpuMoe || 0;
-    $('#chat-nommap').checked = !!config.engines.text.noMmap;
-    $('#chat-mlock').checked = !!config.engines.text.mlock;
-    $('#chat-dio').checked = !!config.engines.text.directIo;
-    $('#chat-kv').value = config.engines.text.cacheTypeK || 'f16';
+    const t = config.engines.text;
+    syncMoeUI();
+    $('#chat-nommap').checked = !!t.noMmap;
+    $('#chat-mlock').checked = !!t.mlock;
+    $('#chat-dio').checked = !!t.directIo;
+    $('#chat-kv').value = t.cacheTypeK || 'f16';
+    $('#set-threads').value = t.threads ?? 4;
+    $('#set-threads-batch').value = t.threadsBatch ?? 4;
+    $('#set-batch').value = t.batchSize ?? 2048;
+    $('#set-ubatch').value = t.ubatchSize ?? 512;
+    $('#set-flash').value = t.flashAttn || 'on';
+    $('#set-parallel').value = t.parallel ?? 4;
+    $('#set-contbatch').checked = t.contBatching !== false;
+    $('#set-ngl').value = t.ngl ?? 99;
+    $('#set-top-p').value = t.topP ?? 0.95;
+    $('#set-top-k').value = t.topK ?? 40;
+    $('#set-min-p').value = t.minP ?? 0.05;
+    $('#set-repeat-penalty').value = t.repeatPenalty ?? 1.1;
+    const ea = t.extraArgs;
+    $('#set-extra-args').value = Array.isArray(ea) ? ea.join(' ') : (ea || '');
+    $('#set-self-mtp').checked = !!t.selfMtp;
+    $('#set-draft-max').value = t.draftMax ?? 3;
+    $('#set-draft-min').value = t.draftMin ?? 1;
+    $('#set-draft-pmin').value = t.draftPMin ?? 0.0;
+    fillDraftSelect();
+    $('#set-draft-model').value = t.draftModel || '';
   }
   startGpuPoll();
   if (config.server) {
     $('#srv-enable').checked = !!config.server.enabled;
     if (config.server.apiKey) $('#srv-key').value = config.server.apiKey;
+    if ($('#srv-enable-system')) $('#srv-enable-system').checked = !!config.server.enabled;
+    if ($('#srv-key-system') && config.server.apiKey) $('#srv-key-system').value = config.server.apiKey;
   }
   if (config.harness) {
     $('#harness-keep').checked = config.harness.keepAlive !== false;
+    if ($('#harness-keep-system')) $('#harness-keep-system').checked = config.harness.keepAlive !== false;
   }
   updateHarnessBar();
   dirs = [...(config.modelDirs || [])];
   renderDirList();
   if (config.audio) {
     $('#audio-outdir').value = config.audio.outputDir || '';
+    const a2 = $('#audio-outdir-system'); if (a2) a2.value = config.audio.outputDir || '';
     $('#trans-autocopy').checked = !!config.audio.copyTranscript;
+    const ta2 = $('#trans-autocopy-system'); if (ta2) ta2.checked = !!config.audio.copyTranscript;
   }
   // sys prompt restore for active conv handled in renderChat
   remotes = config.remotes || [];
@@ -257,11 +330,48 @@ function bindUI() {
   });
   $('#chat-thinking').addEventListener('change', () => { if (activeConv) { activeConv.thinkingMode = $('#chat-thinking').value; persistConv(); } });
   $('#chat-budget').addEventListener('input', () => { if (activeConv) { activeConv.thinkingBudget = +$('#chat-budget').value || 0; persistConv(); } });
-  $('#chat-moe').addEventListener('input', () => saveEngineFlag({ nCpuMoe: +$('#chat-moe').value || 0 }));
+  // MoE — toggle + number (always visible)
+  $('#chat-moe-enable')?.addEventListener('change', () => {
+    const en = $('#chat-moe-enable').checked;
+    const inp = $('#chat-moe');
+    if (inp) inp.disabled = !en;
+    saveEngineFlag({ nCpuMoe: en ? (+inp.value || 0) : 0 });
+  });
+  $('#chat-moe').addEventListener('input', () => {
+    const en = $('#chat-moe-enable');
+    if (en && !en.checked) { $('#chat-moe-enable').checked = true; $('#chat-moe').disabled = false; }
+    saveEngineFlag({ nCpuMoe: +$('#chat-moe').value || 0 });
+  });
   $('#chat-nommap').addEventListener('change', () => saveEngineFlag({ noMmap: $('#chat-nommap').checked }));
   $('#chat-mlock').addEventListener('change', () => saveEngineFlag({ mlock: $('#chat-mlock').checked }));
   $('#chat-dio').addEventListener('change', () => saveEngineFlag({ directIo: $('#chat-dio').checked }));
   $('#chat-kv').addEventListener('change', () => saveEngineFlag({ cacheTypeK: $('#chat-kv').value }));
+  // settings tabs
+  document.querySelectorAll('.settings-tab').forEach(b=> b.addEventListener('click', ()=> switchSettingsPane(b.dataset.pane)));
+  // perf — ponytail: one-liner per knob, save + needs restart
+  $('#set-threads').addEventListener('change', () => saveEngineFlag({ threads: +$('#set-threads').value || 4 }));
+  $('#set-threads-batch').addEventListener('change', () => saveEngineFlag({ threadsBatch: +$('#set-threads-batch').value || 4 }));
+  $('#set-batch').addEventListener('change', () => saveEngineFlag({ batchSize: +$('#set-batch').value || 2048 }));
+  $('#set-ubatch').addEventListener('change', () => saveEngineFlag({ ubatchSize: +$('#set-ubatch').value || 512 }));
+  $('#set-flash').addEventListener('change', () => saveEngineFlag({ flashAttn: $('#set-flash').value }));
+  $('#set-parallel').addEventListener('change', () => saveEngineFlag({ parallel: +$('#set-parallel').value || 4 }));
+  $('#set-contbatch').addEventListener('change', () => saveEngineFlag({ contBatching: $('#set-contbatch').checked }));
+  $('#set-ngl').addEventListener('change', () => saveEngineFlag({ ngl: +$('#set-ngl').value || 99 }));
+  $('#set-top-p').addEventListener('change', () => saveEngineFlag({ topP: parseFloat($('#set-top-p').value) }));
+  $('#set-top-k').addEventListener('change', () => saveEngineFlag({ topK: +$('#set-top-k').value || 0 }));
+  $('#set-min-p').addEventListener('change', () => saveEngineFlag({ minP: parseFloat($('#set-min-p').value) }));
+  $('#set-repeat-penalty').addEventListener('change', () => saveEngineFlag({ repeatPenalty: parseFloat($('#set-repeat-penalty').value) }));
+  $('#set-extra-args').addEventListener('change', () => {
+    const v = $('#set-extra-args').value.trim();
+    const arr = v ? v.split(/\s+/) : [];
+    saveEngineFlag({ extraArgs: arr });
+  });
+  $('#set-self-mtp').addEventListener('change', () => saveEngineFlag({ selfMtp: $('#set-self-mtp').checked }));
+  $('#set-draft-model').addEventListener('change', () => saveEngineFlag({ draftModel: $('#set-draft-model').value }));
+  $('#set-draft-max').addEventListener('change', () => saveEngineFlag({ draftMax: +$('#set-draft-max').value || 3 }));
+  $('#set-draft-min').addEventListener('change', () => saveEngineFlag({ draftMin: +$('#set-draft-min').value || 1 }));
+  $('#set-draft-pmin').addEventListener('change', () => saveEngineFlag({ draftPMin: parseFloat($('#set-draft-pmin').value) || 0 }));
+  $('#bench-run').addEventListener('click', runBench);
   $('#set-font-family').addEventListener('change', async (e) => {
     applyFont();
     config.ui = { ...(config.ui || {}), fontFamily: e.target.value };
@@ -279,7 +389,52 @@ function bindUI() {
     await api('/api/config/save', { method: 'POST', body: { ui: config.ui } });
     renderThinkingSelect();
   });
-  document.querySelector('.moe-hint button[data-open-tab]')?.addEventListener('click', () => switchTab('settings'));
+  // settings theme toggle mirrors sidebar
+  document.querySelectorAll('#settings-theme-toggle button').forEach(b=> b.addEventListener('click', async ()=>{
+    const t = b.dataset.theme;
+    applyTheme(t);
+    document.querySelectorAll('#settings-theme-toggle button').forEach(x=> x.classList.toggle('active', x.dataset.theme===t));
+    config.ui = config.ui || {}; config.ui.theme = t;
+    await api('/api/config/save', { method: 'POST', body: { ui: config.ui } });
+  }));
+  // system pane mirrors
+  $('#harness-keep-system')?.addEventListener('change', async (e)=>{
+    const keep = e.target.checked;
+    $('#harness-keep').checked = keep;
+    config.harness = { ...(config.harness||{}), keepAlive: keep, enabled: true };
+    await api('/api/harness/set', { method:'POST', body:{ keepAlive: keep, enabled: true } });
+    config = await api('/api/config'); updateHarnessBar();
+  });
+  $('#srv-enable-system')?.addEventListener('change', (e)=>{
+    $('#srv-enable').checked = e.target.checked;
+  });
+  $('#srv-key-system')?.addEventListener('input', (e)=>{
+    $('#srv-key').value = e.target.value;
+  });
+  $('#srv-apply-system')?.addEventListener('click', async ()=>{
+    $('#srv-enable').checked = $('#srv-enable-system').checked;
+    $('#srv-key').value = $('#srv-key-system').value;
+    await applyServer();
+    $('#srv-url-system').textContent = $('#srv-url').textContent;
+  });
+  $('#audio-outdir-system')?.addEventListener('change', async (e)=>{
+    const v = e.target.value.trim();
+    $('#audio-outdir').value = v;
+    if (!v) return;
+    config = await api('/api/config/save', { method: 'POST', body: { audio: { ...(config.audio || {}), outputDir: v } } });
+  });
+  $('#trans-autocopy-system')?.addEventListener('change', async (e)=>{
+    $('#trans-autocopy').checked = e.target.checked;
+    config = await api('/api/config/save', { method: 'POST', body: { audio: { ...(config.audio || {}), copyTranscript: e.target.checked } } });
+  });
+  $('#settings-reset')?.addEventListener('click', async ()=>{
+    if (!confirm('Reset Performance & Sampling to defaults?')) return;
+    const patch = { threads:4, threadsBatch:4, batchSize:2048, ubatchSize:512, flashAttn:'on', parallel:1, contBatching:true, ngl:99, cacheTypeK:'f16', noMmap:false, mlock:false, directIo:false, nCpuMoe:0, topP:0.95, topK:40, minP:0.05, repeatPenalty:1.1, extraArgs:[] };
+    config.engines.text = { ...(config.engines.text||{}), ...patch };
+    await api('/api/config/save', { method:'POST', body:{ engines:{ text: patch } } });
+    location.reload();
+  });
+  document.querySelector('.moe-hint button[data-open-tab]')?.addEventListener('click', () => { switchTab('settings'); switchSettingsPane('performance'); });
   $('#chat-provider').addEventListener('change', async (e) => {
     const v = e.target.value;
     if (v === 'local') {
@@ -434,11 +589,15 @@ function bindUI() {
   $('#srv-apply').addEventListener('click', applyServer);
   $('#harness-keep').addEventListener('change', async (e)=>{
     const keep = e.target.checked;
+    const sys = $('#harness-keep-system'); if (sys) sys.checked = keep;
     config.harness = { ...(config.harness||{}), keepAlive: keep, enabled: true };
     await api('/api/harness/set', { method:'POST', body:{ keepAlive: keep, enabled: true } });
     config = await api('/api/config');
     updateHarnessBar();
   });
+  // keep sidebar ↔ system pane in sync
+  $('#srv-enable')?.addEventListener('change', (e)=>{ const s=$('#srv-enable-system'); if(s) s.checked = e.target.checked; });
+  $('#srv-key')?.addEventListener('input', (e)=>{ const s=$('#srv-key-system'); if(s) s.value = e.target.value; });
   $('#harness-copy').addEventListener('click', async ()=>{
     const key = $('#srv-key').value.trim();
     const model = $('#chat-model').value ? $('#chat-model').options[$('#chat-model').selectedIndex].text : 'local-model';
@@ -665,6 +824,7 @@ async function refreshLocal() {
   for (const m of localModels) byType[m.type].push(m);
   fillSelect('#chat-model', byType.text, 'no text models in library');
   refreshMoeHint(modelById($('#chat-model').value) || null);
+  fillDraftSelect();
   fillSelect('#img-model', byType.image, 'no image models — SD1.5 gguf expected');
   fillSelect('#vid-model', byType.video.length ? byType.video : byType.image, byType.video.length ? '' : 'using image models (AnimateDiff mode)');
   if ($('#audio-model')) fillSelect('#audio-model', byType.audio.filter((m) => /whisper|ggml-/.test(m.name)), 'no audio models — download a whisper gguf from HF');

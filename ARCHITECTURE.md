@@ -1,8 +1,8 @@
-# PolarisStudio — Architecture (build 8)
+# PolarisStudio — Architecture (build 13)
 
 ## Overview
 
-PolarisStudio is an Electron app whose main process doubles as a Node HTTP server. The UI is a plain HTML/JS renderer loaded over `http://127.0.0.1:9090` — there is **no IPC layer** between window and backend; the renderer talks to the server exactly like a browser would (fetch + EventSource). Engine binaries (llama-server, sd-server) are spawned as child processes and driven through their own local HTTP APIs. **Build 8 adds a single-port harness proxy on `9090/v1` (same port as vision), auto light/dark, KaTeX, remote harnesses, and harness keepAlive.**
+PolarisStudio is an Electron app whose main process doubles as a Node HTTP server. The UI is a plain HTML/JS renderer loaded over `http://127.0.0.1:9090` — there is **no IPC layer** between window and backend; the renderer talks to the server exactly like a browser would (fetch + EventSource). Engine binaries (llama-server, sd-server) are spawned as child processes and driven through their own local HTTP APIs. **Build 8 added a single-port harness proxy on `9090/v1` (same port as vision), auto light/dark, KaTeX, remote harnesses, and harness keepAlive. Build 13 redesigns Settings into 4 scrollable tabs (Appearance / Generation / Performance & Memory / System), adds 5 sampling/VRAM flags (top_p/top_k/min_p/repeat_penalty/ngl) with `?` help, and fixes MoE visibility + clipping.**
 
 ```
 ┌───────────────────────────── Electron main process ─────────────────────────────┐
@@ -42,7 +42,7 @@ PolarisStudio is an Electron app whose main process doubles as a Node HTTP serve
 2. Two spawn attempts; on failure the last 15 log lines are surfaced as the error.
 3. If the child exits with a bind error, the port is considered held by a stale process: `fuser -k <port>/tcp` is run and the caller retries.
 4. `stop()` sends SIGTERM, escalates to SIGKILL after 8 s.
-5. `argsFor` now maps `cacheTypeK/V` passthrough for TurboQuant (`q4_0_turbo`, `q8_0_turbo` — needs rebuilt llama.cpp) and logs `KV cache: …` in one-line low-VRAM summary.
+5. `argsFor` now maps `cacheTypeK/V` for TurboQuant (`q4_0_turbo`, `q8_0_turbo` — needs rebuilt llama.cpp), plus `top_p/top_k/min_p/repeat_penalty/ngl` (only emitted when non-default) and logs `KV cache: …` / `sampling: …` / `ngl: …` in one-line startup summary.
 
 Engine stdout/stderr is streamed to the renderer as `engine:log` SSE events and kept in a rolling buffer for error reporting.
 
@@ -101,9 +101,10 @@ Recursive scan of each `modelDirs` entry; directories like `animatediff`, `wan_m
 
 ## Renderer architecture (`renderer/app.js` + `style.css`)
 
-- **Theme:** `applyTheme(theme)` + `initTheme()` + `updateHarnessBar()`; `document.documentElement[data-theme]` + `@media (prefers-color-scheme)` in `style.css:1`; `theme-toggle` persists to `config.ui.theme`; `sidebar.collapsed` via `◧` button.
+- **Theme:** `applyTheme(theme)` + `initTheme()` + `updateHarnessBar()`; `document.documentElement[data-theme]` + `@media (prefers-color-scheme)` in `style.css:1`; `theme-toggle` + `settings-theme-toggle` both persist to `config.ui.theme`; `sidebar.collapsed` via `◧` button.
 - **KaTeX:** `md(s)` protects ``` blocks/inline code, renders `$$…$$`/`\[…\]` display and `$…$`/`\(…\)` inline via `katex.renderToString({throwOnError:false})`, then `marked.parse`. Fonts served from `vendor/fonts/` with `Cache-Control: public`.
-- **Harness UI:** `serverbar` now `harness: 9090/v1` pill + `Keep loaded` (`#harness-keep` → `/api/harness/set`) + `Expose to LAN` (`#srv-enable` → `/api/server/set` rebinding `9090`) + `Copy opencode`/`Copy curl` via `copyText()` (clipboard + `execCommand` fallback + `prompt`).
+- **Settings (build 13):** `switchSettingsPane()` / `.settings-tabs` + `.settings-body overflow-y:auto scrollbar-gutter:stable` (fixes clipping) + `.settings-pane[data-pane]` 4 tabs (Appearance / Generation / Performance & Memory / System). `Appearance` holds font + theme live preview; `Generation` holds `top_p/top_k/min_p/repeat_penalty` with `?` help; `Performance & Memory` holds threads/batch/flash/parallel/ngl + KV cache + no-mmap/mlock/direct-io + **MoE toggle+number always visible** + speculative + benchmark; `System` holds harness/LAN/key + paths + extraArgs + Reset. `refreshMoeHint` no longer hides the row; `syncMoeUI()` drives the toggle.
+- **Harness UI:** `serverbar` now `harness: 9090/v1` pill + `Keep loaded` (`#harness-keep` → `/api/harness/set`) + `Expose to LAN` (`#srv-enable` → `/api/server/set` rebinding `9090`) + `Copy opencode`/`Copy curl` via `copyText()` (clipboard + `execCommand` fallback + `prompt`). System tab mirrors these controls.
 - **Remotes:** `renderRemotes()` + `renderProviderSelect()` + `/api/remotes/*` CRUD.
 - **Chat extras:** system prompt presets (`#sys-preset` → `#sys-prompt`), reasoning `<details>`, per-`pre` Copy, `Ctrl+K` palette (`PALETTE_ITEMS` + model list), conversation search (`#conv-search`) + export (`exportConv` to .md/.json), sidebar search, image history strip (`pushHistory` 8-thumb).
 - **Clipboard:** `copyText(text)` helper (secure `writeText` → `execCommand` → `prompt`) used for harness, code blocks, and TTS autocopy — avoids `Write permission denied` unhandled rejections in Electron.

@@ -25,7 +25,7 @@
     <div class="sidebar-foot">
       <div class="sidebar-foot-row">
         <div class="pill pill-gpu">RX 580 · Vulkan</div>
-        <div class="pill" id="build-tag">build 10</div>
+        <div class="pill" id="build-tag">build 13</div>
       </div>
       <div class="theme-toggle" id="theme-toggle">
         <button data-theme="auto" class="active">Auto</button>
@@ -357,36 +357,166 @@
 
     <!-- ============ SETTINGS ============ -->
     <section class="panel" id="tab-settings">
-      <div class="settings-wrap">
-        <details class="section" open>
-          <summary>Appearance</summary>
-          <div class="grid2">
-            <label>Font family
-              <select id="set-font-family" class="select">
-                <option value="inter">Inter</option>
-                <option value="system">System</option>
-                <option value="mono">Monospace</option>
-              </select>
-            </label>
-            <label>Font size <span class="muted" id="set-font-size-val">14px</span>
-              <input id="set-font-size" type="range" min="12" max="18" step="1" value="14" style="width:100%">
-            </label>
+      <div class="settings-tabs" role="tablist">
+        <button class="settings-tab active" data-pane="appearance">Appearance</button>
+        <button class="settings-tab" data-pane="generation">Generation</button>
+        <button class="settings-tab" data-pane="performance">Performance &amp; Memory</button>
+        <button class="settings-tab" data-pane="system">System</button>
+      </div>
+      <div class="settings-body">
+        <div class="settings-content">
+
+          <!-- Appearance pane -->
+          <div class="settings-pane active" data-pane="appearance">
+            <div class="settings-card section">
+              <div class="settings-card-head">
+                <h3>Look &amp; feel</h3>
+                <span class="muted" style="font-size:11px">Live preview — no restart</span>
+              </div>
+              <div class="grid2">
+                <label>Font family
+                  <select id="set-font-family" class="select">
+                    <option value="inter">Inter</option>
+                    <option value="system">System</option>
+                    <option value="mono">Monospace</option>
+                  </select>
+                </label>
+                <label>Font size <span class="muted" id="set-font-size-val">14px</span>
+                  <input id="set-font-size" type="range" min="12" max="18" step="1" value="14" style="width:100%">
+                </label>
+              </div>
+              <div style="margin-top:10px">
+                <div style="font-size:12px;font-weight:600;margin-bottom:6px;color:var(--text)">Theme <span class="help" title="Auto follows your OS light/dark.">?</span></div>
+                <div class="theme-toggle" id="settings-theme-toggle">
+                  <button data-theme="auto" class="active">Auto</button>
+                  <button data-theme="light">Light</button>
+                  <button data-theme="dark">Dark</button>
+                </div>
+              </div>
+            </div>
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>Chat display</h3></div>
+              <label class="check">Advanced thinking modes <span class="help" title="Adds Low / Medium / High / Max and a token budget to the Chat toolbar. For thinking models like Qwen3 / DeepSeek.">?</span> <input id="set-adv-thinking" type="checkbox" style="margin-left:auto"></label>
+              <p class="muted" style="font-size:11px;margin-top:6px">Shows extended thinking controls in the Chat toolbar. Requires a thinking-capable model.</p>
+            </div>
           </div>
-        </details>
-        <details class="section" open>
-          <summary>Text engine flags</summary>
-          <div class="grid2">
-            <label id="chat-moe-wrap" title="MoE models only — offload N expert blocks to system RAM to free VRAM.">MoE CPU offload <input id="chat-moe" type="number" value="0" min="0" step="1" class="num"></label>
-            <label class="check" title="load weights without mmap"><input id="chat-nommap" type="checkbox"> no-mmap</label>
-            <label class="check" title="lock weights in RAM"><input id="chat-mlock" type="checkbox"> mlock</label>
-            <label class="check" title="direct I/O"><input id="chat-dio" type="checkbox"> direct-io</label>
+
+          <!-- Generation pane -->
+          <div class="settings-pane" data-pane="generation">
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>Sampling</h3><span class="muted" style="font-size:11px">Needs restart</span></div>
+              <p class="muted" style="font-size:11px;margin-bottom:10px">Controls randomness &amp; repetition. Lower = deterministic. Tune one at a time.</p>
+              <div class="grid2">
+                <label>top_p <span class="help" title="Nucleus sampling: keep smallest set of tokens whose cumulative probability ≥ p. 0.95 is balanced, 1.0 = off.">?</span> <input id="set-top-p" type="number" value="0.95" min="0" max="1" step="0.05" class="num"></label>
+                <label>top_k <span class="help" title="Keep only top K tokens. 40 is default, 0 = off, higher = more diverse.">?</span> <input id="set-top-k" type="number" value="40" min="0" max="200" step="1" class="num"></label>
+              </div>
+              <div class="grid2">
+                <label>min_p <span class="help" title="Minimum token probability relative to the best token. 0.05 filters low-confidence noise. 0 = off.">?</span> <input id="set-min-p" type="number" value="0.05" min="0" max="1" step="0.01" class="num"></label>
+                <label>repeat penalty <span class="help" title="Penalizes repeated tokens. 1.0 = off, 1.1 is gentle, >1.3 can be harsh.">?</span> <input id="set-repeat-penalty" type="number" value="1.1" min="0.8" max="2" step="0.05" class="num"></label>
+              </div>
+              <p class="muted" style="font-size:11px;margin-top:8px">Tip: for creative writing lower min_p (0.02), for code raise it (0.08) + penalty 1.15.</p>
+            </div>
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>Context</h3></div>
+              <p class="muted" style="font-size:11px;margin-bottom:8px">Defaults used when starting the engine from the Chat tab. You can still override per-chat.</p>
+              <div class="grid2">
+                <label>Context length <span class="help" title="Total tokens the model can see (prompt + output). Larger needs more VRAM.">?</span> <span class="muted" style="float:right;font-size:10px" id="ctx-vram-hint"></span></label>
+                <span></span>
+              </div>
+              <div class="muted" style="font-size:11px">Set in Chat toolbar → ctx. Change there and it persists for next start.</div>
+            </div>
           </div>
-          <label class="field-inline" title="KV cache quantization — q4_0/q8_0 compress the KV cache to fit more context in VRAM">KV cache <select id="chat-kv" class="select kv"><option value="f16">f16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="iq4_nl">iq4_nl</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select></label>
-        </details>
-        <details class="section" open>
-          <summary>Chat</summary>
-          <label class="check" title="show Low/Medium/High/Max + thinking budget in the chat toolbar"><input id="set-adv-thinking" type="checkbox"> Advanced thinking modes (Low / Medium / High / Max + budget)</label>
-        </details>
+
+          <!-- Performance & Memory pane -->
+          <div class="settings-pane" data-pane="performance">
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>CPU &amp; Batch</h3><span class="badge-needs-restart">restart</span></div>
+              <p class="muted" style="font-size:11px;margin-bottom:10px">Tuned for i5-7500T (4c/4t) + RX 580 8G Vulkan. Sweet spot: threads 4, batch 2048, ubatch 512, flash on, parallel 1.</p>
+              <div class="grid2">
+                <label>threads <span class="help" title="CPU threads for token generation. Match physical cores (4 on i5-7500T).">?</span> <input id="set-threads" type="number" value="4" min="1" max="8" step="1" class="num"></label>
+                <label>threads-batch <span class="help" title="Threads for prompt processing (prefill). Usually same as threads.">?</span> <input id="set-threads-batch" type="number" value="4" min="1" max="8" step="1" class="num"></label>
+              </div>
+              <div class="grid2">
+                <label>batch <span class="help" title="Logical batch size. Larger = faster prefill, more VRAM. 2048 is safe for 8G.">?</span> <input id="set-batch" type="number" value="2048" min="128" step="128" class="num"></label>
+                <label>ubatch <span class="help" title="Physical micro-batch. 512 is ideal for Polaris. Must divide batch.">?</span> <input id="set-ubatch" type="number" value="512" min="64" step="64" class="num"></label>
+              </div>
+              <div class="grid2">
+                <label>flash-attn <span class="help" title="Flash attention reduces VRAM for long contexts. Keep on for Polaris.">?</span> <select id="set-flash" class="select"><option value="on">on</option><option value="off">off</option><option value="auto">auto</option></select></label>
+                <label>parallel <span class="help" title="Server slots for concurrent chats. 1 = solo, 2+ = parallel but more VRAM.">?</span> <input id="set-parallel" type="number" value="1" min="1" max="4" step="1" class="num"></label>
+              </div>
+              <label class="check" style="margin-top:8px">continuous batching <span class="help" title="Keeps the model busy between requests. Keep on for single-chat.">?</span> <input id="set-contbatch" type="checkbox" checked style="margin-left:auto"></label>
+              <label class="check">GPU layers (ngl) <span class="help" title="Layers offloaded to Vulkan. 99 = all. Lower if VRAM OOM (e.g. 35 for 30B on 8G).">?</span> <input id="set-ngl" type="number" value="99" min="0" max="99" step="1" class="num" style="width:90px;margin-left:auto"></label>
+            </div>
+
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>Memory</h3><span class="badge-needs-restart">restart</span></div>
+              <div class="kv-row">
+                <label>KV cache <span class="help" title="Compresses the conversation cache to fit more context in VRAM. f16 = full quality, q8_0/q4_0 = saves VRAM but slightly slower prefill.">?</span></label>
+                <select id="chat-kv" class="select kv" style="width:140px"><option value="f16">f16</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="iq4_nl">iq4_nl</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select>
+              </div>
+              <div class="grid3">
+                <label class="check">no-mmap <span class="help" title="Load model without memory mapping. Slower load, more RAM stable.">?</span> <input id="chat-nommap" type="checkbox"></label>
+                <label class="check">mlock <span class="help" title="Lock model in RAM (no swap). Needs enough system RAM.">?</span> <input id="chat-mlock" type="checkbox"></label>
+                <label class="check">direct-io <span class="help" title="Bypass OS cache for model file. Helps on low-RAM systems.">?</span> <input id="chat-dio" type="checkbox"></label>
+              </div>
+              <div class="moe-row">
+                <label class="check" style="flex:1">MoE CPU offload <span class="help" title="For MoE models (DeepSeek, Qwen-MoE): number of expert layers kept in system RAM instead of VRAM. 0 = all on GPU. Increase to fit large MoE on 8GB. Non-MoE models ignore this.">?</span> <input id="chat-moe-enable" type="checkbox" style="margin-left:auto"></label>
+                <input id="chat-moe" type="number" value="0" min="0" step="1" class="num" style="width:90px">
+              </div>
+              <p class="muted" style="font-size:11px;margin-top:6px">MoE: e.g. DeepSeek-V2 21B → try 8–16; Qwen3-30B MoE → try 12–20. Watch engine log for “MoE offload: N”.</p>
+            </div>
+
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>Speculative decoding</h3><span class="badge-needs-restart">restart</span></div>
+              <p class="muted" style="font-size:11px;margin-bottom:8px">Up to 1.5× tok/s. Zero extra VRAM with Self-MTP (Qwen3).</p>
+              <label class="check">Self-MTP (Qwen3 nextn) <span class="help" title="Uses the model's own multi-token prediction heads. No extra VRAM.">?</span> <input id="set-self-mtp" type="checkbox" style="margin-left:auto"></label>
+              <label style="margin-top:8px">Draft model <span class="help" title="Small model that predicts tokens fast (e.g. Qwen3 0.6B Q4). Main model verifies them.">?</span>
+                <select id="set-draft-model" class="select" style="width:100%"><option value="">(none — no separate draft)</option></select>
+              </label>
+              <div class="grid2" style="margin-top:8px">
+                <label>draft max <span class="help" title="Max draft tokens per step. 3 is sweet spot.">?</span> <input id="set-draft-max" type="number" value="3" min="1" max="8" step="1" class="num"></label>
+                <label>draft min <span class="help" title="Min draft tokens.">?</span> <input id="set-draft-min" type="number" value="1" min="0" max="4" step="1" class="num"></label>
+              </div>
+              <label style="margin-top:6px">draft p-min <span class="help" title="Minimum probability to accept a draft token.">?</span> <input id="set-draft-pmin" type="number" value="0.0" min="0" max="1" step="0.05" class="num"></label>
+              <div class="bench-row" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+                <button id="bench-run" class="btn">Run quick benchmark (30s)</button>
+                <pre id="bench-out" class="muted" style="font-size:11px;white-space:pre-wrap;margin-top:6px;max-height:120px;overflow:auto"></pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- System pane -->
+          <div class="settings-pane" data-pane="system">
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>Harness &amp; Server</h3></div>
+              <p class="muted" style="font-size:11px;margin-bottom:10px">Expose Polaris to your LAN so opencode / other devices can use <code>http://&lt;lan-ip&gt;:9090/v1</code>. Same port as UI.</p>
+              <label class="check">Keep text model loaded <span class="help" title="Keep the text engine alive when you switch to Images/Video so opencode doesn't cold-start.">?</span> <input id="harness-keep-system" type="checkbox" checked style="margin-left:auto"></label>
+              <label class="check">Expose to LAN (0.0.0.0) <span class="help" title="Binds 9090 to all interfaces. Off = localhost only.">?</span> <input id="srv-enable-system" type="checkbox" style="margin-left:auto"></label>
+              <label style="margin-top:8px">API key <span class="help" title="Bearer token for /v1. Leave empty for no auth.">?</span> <input id="srv-key-system" type="password" placeholder="empty = no auth" class="input"></label>
+              <button id="srv-apply-system" class="btn" style="margin-top:8px">Apply &amp; restart server</button>
+              <span id="srv-url-system" class="muted" style="font-size:11px;margin-left:8px"></span>
+            </div>
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>Paths &amp; Audio</h3></div>
+              <label>Audio output dir <span class="help" title="Where TTS files are saved.">?</span> <input id="audio-outdir-system" type="text" class="input" placeholder="/home/touhid/PolarisAudio"></label>
+              <label class="check" style="margin-top:8px">Auto-copy transcript <span class="help" title="Copy Whisper transcript to clipboard automatically.">?</span> <input id="trans-autocopy-system" type="checkbox" style="margin-left:auto"></label>
+              <p class="muted" style="font-size:11px;margin-top:8px">Model directories and download dir are managed in <b>Library</b>. Remote harnesses in Library → Remotes.</p>
+            </div>
+            <div class="settings-card section">
+              <div class="settings-card-head"><h3>Advanced</h3></div>
+              <label>Extra llama-server args <span class="help" title="Freeform extra flags appended as-is, e.g. --jinja --rope-freq-base 10000. Power users only.">?</span> <input id="set-extra-args" type="text" class="input" placeholder="--jinja --rope-freq-base 10000"></label>
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <button id="settings-reset" class="btn ghost">Reset to defaults</button>
+                <span class="muted" style="font-size:11px;align-self:center">Resets Performance &amp; Sampling only. No model deletion.</span>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="settings-foot">
+        <span class="muted" style="font-size:11px">Changes marked <span class="badge-needs-restart" style="font-size:10px">restart</span> need <b>Restart engine</b> in Chat.</span>
+        <span class="muted" style="font-size:11px;margin-left:auto">PolarisStudio · RX 580 · Vulkan</span>
       </div>
     </section>
   </main>

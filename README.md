@@ -15,7 +15,7 @@ The "everything local in one app" space is crowded (LM Studio, Locally Uncensore
 
 Expect parity on the common stuff: OpenAI-compatible local harness, uncensored-model search, chat/images/video generation. The reason to pick PolarisStudio is the hardware it runs on and how little you have to install to get there.
 
-## Features (build 8)
+## Features (build 13)
 
 - **Chat** — OpenAI-compatible streaming (SSE), **LaTeX via KaTeX** (`$…$` inline, `$$…$$` display), **system prompt presets** (Helpful/Reviewer/Creative/Custom), markdown rendering, chain-of-thought ("thinking") as a **collapsible** `<details>` with reasoning body, **copy button on every code block**, ctx/temperature/`repeat_penalty` controls, persistent conversation history with **search/filter**, **rename (dblclick)**/**export to .md/.json**/**delete** per chat.
 - **Vision** — paste, drop, or attach an image into chat; the model sees it via a multimodal projector. `--mmproj` is auto-discovered next to the model file, and a bundled MCP server (`mcp-server.js`) exposes `describe_image` to coding agents.
@@ -28,6 +28,8 @@ Expect parity on the common stuff: OpenAI-compatible local harness, uncensored-m
 - **Local AI harness — single port `9090/v1`** — the same port as the vision MCP (`http://127.0.0.1:9090`). **Open by default** on `127.0.0.1:9090/v1` (same-machine opencode needs no config). Toggle **Expose to LAN** to rebind to `0.0.0.0:9090` for other machines (`http://<lan-ip>:9090/v1`). `GET /v1/models` returns local text GGUFs even before a model is loaded; `POST /v1/chat/completions` auto-starts the harness model if needed. **Copy opencode.json** and **Copy curl** buttons in the Chat harness bar. Works with any OpenAI client (opencode, curl, Python `openai`).
 - **Remote harness (chat-only)** — connect to other machines’ `llama-server` / vLLM / Ollama via `Library → Remote llama-servers` (name + `http://host:port` + key, **Test** via `/v1/models`), then pick `Provider: [Local | lab-machine]` in Chat. Streaming + reasoning proxied, no local VRAM needed. Great for using a bigger box’s GPU from the Polaris box.
 - **Prettier LM Studio-like UI** — centered 780px chat, pill tabs, `backdrop-blur` topbar, subtle shadows, JetBrains Mono for code, **auto light/dark** (`Auto` follows `prefers-color-scheme`, `Light`/`Dark` override, persisted in `config.json:ui.theme`), **collapsible sidebar** (◧), **Ctrl+K palette** (tabs, models, new chat, theme, etc.), conversation search, theme-aware scrollbars.
+- **Settings — 4 tabs, no clipping** — `Appearance` (font + theme with live preview), `Generation` (top_p/top_k/min_p/repeat_penalty with `?` help), `Performance & Memory` (threads/batch/flash/parallel/ngl, KV cache, no-mmap/mlock/direct-io, **MoE CPU offload toggle + number always visible**, speculative decoding + benchmark), `System` (harness/LAN/API key, paths, extraArgs, Reset). Scrollable body with `scrollbar-gutter: stable`; every flag has a `?` tooltip.
+- **Sampling + VRAM tuning** — `top_p (0.95)`, `top_k (40)`, `min_p (0.05)`, `repeat_penalty (1.1)` and `ngl (99)` are now persisted in `config.json` and forwarded as `--top-p/--top-k/--min-p/--repeat-penalty/--ngl` (only when non-default). One-line startup log summarizes sampling + ngl.
 - **TurboQuant** — KV cache now offers `q4_0_turbo` / `q8_0_turbo` in addition to `f16/q8_0/q4_0`. Needs a rebuilt `llama.cpp` (master post-`2024-12`) — otherwise the engine logs `unknown cache type` and falls back. Pass via UI or `extraArgs`.
 - **Resilience** — renderer crash recreates the window automatically; closing the window keeps the server + engines + downloads alive (headless mode); stale port conflicts are detected and killed automatically; harness `keepAlive` avoids cold-start for opencode; one engine runs at a time to stay inside VRAM (unless keepAlive).
 
@@ -105,14 +107,16 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `harness.model` | Last harness model path (auto-set when you Start engine) | `""` |
 | `engines.text.binary` | Path to `llama-server` | `~/llama.cpp/build/bin/llama-server` |
 | `engines.text.port` | Port for the text engine (internal, proxied) | `8080` |
-| `engines.text.ngl` | GPU layers (`-ngl`) | `99` |
+| `engines.text.ngl` | GPU layers (`-ngl`, Performance tab) | `99` |
 | `engines.text.ctx` | Context size | `8192` |
-| `engines.text.nCpuMoe` | MoE experts offloaded to CPU (`--n-cpu-moe`; UI slider, MoE models only) | `0` |
+| `engines.text.topP` / `engines.text.topK` / `engines.text.minP` | Sampling: `top_p` / `top_k` / `min_p` (Generation tab, `?` help; forwarded as `--top-p/--top-k/--min-p` only when non-default) | `0.95` / `40` / `0.05` |
+| `engines.text.repeatPenalty` | Repetition penalty (`--repeat-penalty`, Generation tab) | `1.1` |
+| `engines.text.nCpuMoe` | MoE experts offloaded to CPU (`--n-cpu-moe`; toggle + number always visible, `?` help; MoE models only) | `0` |
 | `engines.text.noMmap` | Load weights without mmap (`--no-mmap`) | `false` |
 | `engines.text.mlock` | Lock weights in RAM (`--mlock`) | `false` |
 | `engines.text.directIo` | Bypass page cache on weight reads (`--direct-io`) | `false` |
 | `engines.text.cacheTypeK` / `engines.text.cacheTypeV` | KV cache quantization (`--cache-type-k/v`; `f16`/`q8_0`/`q4_0`/`q4_0_turbo`/`q8_0_turbo`) | `f16` |
-| `engines.text.extraArgs` | Extra llama-server flags | `["--flash-attn","on","--jinja"]` |
+| `engines.text.extraArgs` | Extra llama-server flags (System → Advanced, space-separated) | `["--flash-attn","on","--jinja"]` |
 | `engines.text.provider` / `engines.text.activeRemoteId` | Remote harness selection (`local` vs `remote` + id) | `local` |
 | `engines.text.mmproj` | Optional explicit vision projector; otherwise auto-discovered only when an `mmproj-*.gguf` **shares the model's family name** (quant suffixes ignored, e.g. `gemma-4-E4B-it-Q4_0.gguf` ↔ `mmproj-gemma-4-E4B-it-Q8_0.gguf`). Unrelated projectors are never attached. | auto |
 | `remotes` | List of remote llama-servers `{id,name,baseUrl,apiKey}` | `[]` |
@@ -186,11 +190,12 @@ The first request starts the text engine if it isn't running (model load takes a
 - **Log button unresponsive** — the engine-log panel appeared dead because the `footer.logbar` sat below the viewport: `.app` was fixed at `100vh` and `body { overflow: hidden }` clipped it. The app body is now a flex column and the panel slides into view on toggle (build 4+).
 - **All buttons dead after the vision update** — `sendChat` declared `const content` for the user message while the streaming accumulator below used `let content`, a redeclaration that killed the whole script (SyntaxError at parse time → zero event listeners attached). The user-message variable was renamed `userContent`.
 - **Copy buttons “Write permission denied”** — `navigator.clipboard.writeText` fails in Electron without a secure context. Now uses `copyText()` with `execCommand('copy')` fallback + `prompt()` last resort; no more `unhandled:` banner (build 8).
-- **Taskbar still on build 5** — `~/.local/bin/polarisstudio` was a stale AppImage; `dist` now contains build 8 and `cp dist/*.AppImage ~/.local/bin/polarisstudio` updates it.
+- **Taskbar still on build 5/8** — `~/.local/bin/polarisstudio` was a stale AppImage; `dist` now contains build 13 and `cp dist/*.AppImage ~/.local/bin/polarisstudio && update-desktop-database ~/.local/share/applications/` updates it (may need unpin/re-pin or `fusermount -u /tmp/.mount_polar*` if `Text file busy`).
+- **Settings clipping / scrollbar missing** — `#tab-settings` was `overflow-y:auto` on a flex parent that clipped instead of scrolling; now `flex column + .settings-body overflow-y:auto scrollbar-gutter:stable` with 4 tabs.
 
 ## Troubleshooting
 
-- **MoE model too slow / out of VRAM** — raise **MoE CPU** (offloads expert blocks to system RAM), or switch **KV cache** to `q8_0`/`q4_0`/`q4_0_turbo` to shrink cache VRAM. Toggles apply per session from the chat toolbar. (Deprecated `--no-mmap`/`--mlock`/`--direct-io` still work in llama-server; a one-line deprecation warning in the log is expected.)
+- **MoE model too slow / out of VRAM** — in **Settings → Performance & Memory** raise **MoE CPU offload** (toggle + number, offloads expert blocks to RAM) or lower **GPU layers (ngl)**, or switch **KV cache** to `q8_0`/`q4_0`. Changes need **Restart engine** in Chat.
 - **"couldn't bind / address already in use"** — a stale engine from a killed app holds the port. The app detects this, runs `fuser -k <port>/tcp`, and retries.
 - **Downloads stall or fail** — this machine's IP may be throttled by HuggingFace (datacenter IPs get 401 on the API; the app falls back to scraping the public HTML tree page). Downloads resume via `.part` files; the retry restarts from where it stopped. Use **Cancel** to abort a stalled download.
 - **Model repeats itself / loops** — `repeat_penalty: 1.1` is sent by default on every chat request; raise `temperature` if a model is still degenerate.
