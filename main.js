@@ -19,7 +19,7 @@ const sseClients = new Set();
 // engine instances: text / image / video / audio (companion python server)
 const engines = {};
 for (const type of ['text', 'image', 'video', 'audio']) {
-  const cfg = { ...config.get().engines[type] };
+  const cfg = { ...config.get().engines[type], modelDirs: config.get().modelDirs };
   if (type === 'audio') {
     cfg.script = app.isPackaged ? path.join(process.resourcesPath, 'app.asar.unpacked', 'audio_server.py') : path.join(__dirname, 'audio_server.py');
     cfg.spawnEnv = {
@@ -545,6 +545,19 @@ async function api(p, data, url) {
       return { body: { text } };
     }
     case '/api/models': return { body: models.list(config.get().modelDirs) };
+    case '/api/models/flux-check': {
+      const mp = (data.modelPath || url.searchParams.get('path') || '').trim();
+      const { isFluxKleinPath, resolveFluxKleinDeps } = require('./lib/engines');
+      if (!mp) return { body: { isFluxKlein: false } };
+      const isFlux = isFluxKleinPath(mp);
+      if (!isFlux) return { body: { isFluxKlein: false } };
+      const imgCfg = config.get().engines.image || {};
+      const deps = resolveFluxKleinDeps(mp, { ...imgCfg, modelDirs: config.get().modelDirs });
+      const missing = [];
+      if (!deps.vae) missing.push('vae');
+      if (!deps.llm) missing.push('llm');
+      return { body: { isFluxKlein: true, vae: deps.vae || null, llm: deps.llm || null, missing, ready: missing.length === 0 } };
+    }
     case '/api/models/delete': { await models.remove(data.path); return { body: true }; }
     case '/api/hf/search': return { body: await hf.search(url.searchParams.get('q') || '') };
     case '/api/hf/files': return { body: await hf.listFiles(url.searchParams.get('repo') || '') };

@@ -381,6 +381,13 @@ textarea { resize: vertical; font-family: inherit; line-height: 1.5; }
 .history-strip img:hover { transform: scale(1.05); border-color: var(--accent); }
 .history-strip img.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(91,140,255,.25); }
 
+.flux-help { margin-top: 8px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(251,191,36,.35); background: rgba(251,191,36,.08); font-size: 12px; line-height: 1.5; }
+.flux-help.ready { border-color: rgba(74,222,128,.35); background: rgba(74,222,128,.08); }
+.flux-help .flux-title { font-weight: 700; color: var(--text); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.flux-help .muted { font-size: 11px; }
+.flux-help .flux-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.flux-help code { background: var(--bg3); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 11px; font-family: var(--font-mono); }
+
 /* ---------------- library ---------------- */
 .lib-columns { display: flex; gap: 20px; flex: 1; min-height: 0; padding: 16px; }
 .lib-local, .lib-hf { flex: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }

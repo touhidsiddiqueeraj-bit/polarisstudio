@@ -124,6 +124,7 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `engines.image.binary` / `engines.video.binary` | Path to `sd-server` | `~/stable-diffusion.cpp/build/bin/sd-server` |
 | `engines.image.port` / `engines.video.port` | Image / video ports | `7800` / `7801` |
 | `engines.image.backend` / `engines.video.backend` | Vulkan backend string | `diffusion=vulkan0,clip=vulkan0,vae=vulkan0` |
+| `engines.image.vae` / `engines.image.llm` | FLUX.2-klein companions: VAE (`flux2_vae.safetensors`) + text encoder LLM (`Qwen3-4B GGUF`); auto-discovered in `modelDirs` if not set | auto |
 | `engines.video.motionModule` | AnimateDiff motion module `.safetensors` | `null` |
 | `engines.audio.python` | Python interpreter for the TTS/STT service | the app's bundled venv |
 | `engines.audio.binary` | Path to `audio_server.py` | bundled |
@@ -134,9 +135,18 @@ This file is machine-specific and gitignored — the app regenerates sane defaul
 | `engines.audio.ggmlBackend` | GGML backend for qwen3 (`Vulkan0`, `CPU`…) | `Vulkan0` |
 | `server.enabled` / `server.apiKey` | Expose `9090` to LAN (`0.0.0.0`) + optional Bearer auth for the harness | off |
 
+## FLUX.2-klein (diffusion-only)
+
+`flux-2-klein-4b-*.gguf` (~2.5 GB) is **not** a standalone image model — it is the transformer only. `stable-diffusion.cpp` requires it via `--diffusion-model` plus two companions:
+
+* **VAE** — `flux2_vae.safetensors` (321 MB, `Comfy-Org/flux2-klein-4B` → `split_files/vae/flux2-vae.safetensors`, non-gated)
+* **LLM text encoder** — `Qwen3-4B-Q4_K_M.gguf` (2.5 GB, `unsloth/Qwen3-4B-GGUF`)
+
+Place both in any `modelDirs` (e.g. `/mnt/backup/llm-models` or `~/stable-diffusion.cpp/models`) and Polaris auto-discovers them. The Images tab shows a banner when they are missing with one-click download buttons; the Library marks `flux-2-klein` with `needs VAE+LLM`. On RX 580 8 GB use `512×512, steps 4, cfg 1.0, sampler lcm` and `diffusion=vulkan0,clip=vulkan0,vae=vulkan0` (+ `--offload-to-cpu` / `--vae-tiling` if OOM). Full single-file models like `LCM_Dreamshaper_v7-f16.gguf` still work via `-m`.
+
 ## Known limitations
 
-- **Model downloads from HuggingFace are unreliable** — downloads can stall, fail silently, or never appear in the download list, especially from datacenter IPs (HF throttles/401s them). Retrying, or downloading manually via `curl -L -C -` into a configured model directory, is the workaround. In-flight downloads now have a **Cancel** button (keeps `.part` for resume).
+- **Model downloads from HuggingFace are unreliable** — downloads can stall, fail silently, or never appear in the download list, especially from datacenter IPs (HF throttles/401s them). Retrying, or downloading manually via `curl -L -C -` into a configured model directory, is the workaround. In-flight downloads now have a **Cancel** button (keeps `.part` for resume). For FLUX.2-klein the VAE on `black-forest-labs/FLUX.2-dev` is gated — Polaris uses the `Comfy-Org` mirror above.
 - **Vision needs a multimodal model** — chat attachments only work when the loaded text model has an `mmproj` projector next to it (e.g. an official Gemma/SmolVLM GGUF + its `mmproj-*.gguf` in the same directory). Plain text-only GGUFs ignore attached images.
 - **TurboQuant needs a rebuilt llama.cpp** — `q4_0_turbo` / `q8_0_turbo` only works with a post-`2024-12` `llama-server` build; otherwise the log shows `unknown cache type` and you should use `q8_0`.
 

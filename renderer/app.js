@@ -488,6 +488,7 @@ function bindUI() {
   $('#conv-new').addEventListener('click', newConversation);
 
   $('#img-generate').addEventListener('click', generateImage);
+  $('#img-model').addEventListener('change', () => refreshFluxHelp());
   $('#img-start-engine').addEventListener('click', async () => {
     const m = modelById($('#img-model').value);
     if (m) { await startEngine('image', m); refreshEngineStatus(); }
@@ -869,6 +870,44 @@ function fillSelect(sel, models, placeholder) {
     for (const m of models) s.append(new Option(m.name, m.path));
   }
   if (cur) s.value = cur;
+  if (sel === '#img-model') setTimeout(refreshFluxHelp, 0);
+}
+
+async function refreshFluxHelp() {
+  const box = $('#img-flux-help');
+  if (!box) return;
+  const path = $('#img-model').value;
+  if (!path || !/flux[._-]?2.*klein/i.test(path)) { box.hidden = true; box.innerHTML = ''; return; }
+  try {
+    const r = await api('/api/models/flux-check?path=' + encodeURIComponent(path));
+    if (!r.isFluxKlein) { box.hidden = true; return; }
+    if (r.ready) {
+      box.hidden = false;
+      box.className = 'flux-help ready';
+      box.innerHTML = '<div class="flux-title">✓ FLUX.2-klein ready</div><div class="muted">Diffusion: <code>' + path.split('/').pop() + '</code><br>VAE: <code>' + (r.vae.split('/').pop()) + '</code> · LLM: <code>' + (r.llm.split('/').pop()) + '</code><br>RX580 tip: 512×512, steps 4, cfg 1.0, sampler lcm.</div>';
+      return;
+    }
+    box.hidden = false;
+    box.className = 'flux-help';
+    const dlDir = (config.modelDirs && config.modelDirs[0]) || (dirs && dirs[0]) || '/mnt/backup/llm-models';
+    const missing = r.missing || [];
+    let html = '<div class="flux-title">⚠ FLUX.2-klein needs extra files</div>';
+    html += '<div class="muted">This 2.5 GB GGUF is <b>diffusion-only</b> — not standalone. It needs:</div>';
+    html += '<div class="muted" style="margin-top:6px">' + missing.map(m=> m==='vae' ? '• <b>VAE</b> <code>flux2_vae.safetensors</code> (321 MB, Comfy-Org)' : '• <b>Qwen3-4B</b> <code>Qwen3-4B-Q4_K_M.gguf</code> (2.5 GB, unsloth)').join('<br>') + '</div>';
+    html += '<div class="flux-actions">';
+    if (missing.includes('vae')) html += '<button id="flux-dl-vae" class="btn sm">↓ Download VAE</button>';
+    if (missing.includes('llm')) html += '<button id="flux-dl-llm" class="btn sm">↓ Download Qwen3-4B</button>';
+    html += '</div><div class="muted" style="margin-top:6px">Dest: <code>' + dlDir + '</code> · Or download manually via Library → HuggingFace.</div>';
+    box.innerHTML = html;
+    if (missing.includes('vae')) $('#flux-dl-vae').addEventListener('click', async () => {
+      $('#flux-dl-vae').textContent = 'downloading…'; $('#flux-dl-vae').disabled = true;
+      try { await api('/api/hf/download', { method: 'POST', body: { repo: 'Comfy-Org/flux2-klein-4B', file: 'split_files/vae/flux2-vae.safetensors', destDir: dlDir } }); } catch(e){ showErr(e.message); }
+    });
+    if (missing.includes('llm')) $('#flux-dl-llm').addEventListener('click', async () => {
+      $('#flux-dl-llm').textContent = 'downloading…'; $('#flux-dl-llm').disabled = true;
+      try { await api('/api/hf/download', { method: 'POST', body: { repo: 'unsloth/Qwen3-4B-GGUF', file: 'Qwen3-4B-Q4_K_M.gguf', destDir: dlDir } }); } catch(e){ showErr(e.message); }
+    });
+  } catch (e) { box.hidden = true; }
 }
 
 function renderDirList() {
@@ -915,6 +954,11 @@ function renderLocalList() {
       }
       if (m.name===active) row.append(el('span','mbadge','● loaded'));
       if (m.moe) row.append(el('span','mbadge remote','MoE'));
+      if (/flux[._-]?2.*klein/i.test(m.name)) {
+        const b = el('span','mbadge warn','needs VAE+LLM');
+        b.title = 'FLUX.2-klein is diffusion-only — needs flux2_vae.safetensors + Qwen3-4B';
+        row.append(b);
+      }
       const del = el('button', 'btn ghost', 'Delete');
       del.addEventListener('click', async () => {
         if (!confirm('Delete ' + m.name + '?')) return;
@@ -951,7 +995,9 @@ async function startEngine(type, model, opts) {
     return status;
   } catch (e) {
     setPill('st-' + type, 'failed');
-    appendLog('system', 'START ERROR: ' + e.message);
+    const msg = String(e.message || e);
+    appendLog('system', 'START ERROR: ' + msg);
+    if (type === 'image' && /FLUX\.2-klein/i.test(msg)) setTimeout(refreshFluxHelp, 0);
     return null;
   }
 }
